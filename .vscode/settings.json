@@ -1,0 +1,13 @@
+{
+    "python.analysis.exclude": [
+        "_reference/**",
+        ".venv/**",
+        "**/.env"
+    ],
+    "python.analysis.diagnosticMode": "openFilesOnly",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportInsecureProtocol": "none",
+        "reportFloatEquality": "none",
+        "reportCognitiveComplexity": "none"
+    }
+}

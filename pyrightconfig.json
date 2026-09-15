@@ -1,0 +1,7 @@
+{
+  "exclude": ["_reference/**", ".venv/**", "**/.env", "**/.env/**"],
+  "reportInsecureProtocol": false,
+  "typeCheckingFeatures": {
+    "reportFloatEquality": false
+  }
+}

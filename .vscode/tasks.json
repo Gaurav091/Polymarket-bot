@@ -1,0 +1,91 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Polymarket Bot: Run (Paper)",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "bot.main"],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "DRY_RUN": "true",
+                    "PYTHONUNBUFFERED": "1",
+                    "POSITION_TIMEOUT_MINUTES": "20"
+                }
+            },
+            "isBackground": false,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": false
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Survival bot in PAPER mode - scans Polymarket continuously, must earn within the window or dies"
+        },
+        {
+            "label": "Polymarket Bot: Run (LIVE - real money)",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "bot.main"],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "DRY_RUN": "false",
+                    "PYTHONUNBUFFERED": "1"
+                }
+            },
+            "isBackground": false,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": false
+            },
+            "problemMatcher": [],
+            "detail": "Survival bot in LIVE mode - REAL MONEY. Requires POLYMARKET_PRIVATE_KEY in .env"
+        },
+        {
+            "label": "Polymarket Bot: Dashboard",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["-m", "bot.dashboard"],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONUNBUFFERED": "1"
+                }
+            },
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": false
+            },
+            "problemMatcher": [],
+            "detail": "Paper-trading dashboard - http://127.0.0.1:8500 - trades, PnL, equity curve, survival events"
+        },
+        {
+            "label": "Polymarket Bot: Self-Check",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": ["selfcheck.py"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "isBackground": false,
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Run the 14-assertion self-check suite"
+        }
+    ]
+}

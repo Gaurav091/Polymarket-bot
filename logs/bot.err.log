@@ -1,0 +1,24 @@
+13:56:02 INFO    ============================================================
+13:56:02 INFO    SURVIVAL BOT — earn within the window or die
+13:56:02 INFO      Mode: PAPER | Capital: $5050.0
+13:56:02 INFO      Survival window: 30m (grace: 10m)
+13:56:02 INFO      Survival mode: OFF
+13:56:02 INFO    ============================================================
+13:56:02 INFO    [watcher] started
+13:56:29 INFO    [markets] spread filter: 38 → 35 (rejected 3 wide-spread)
+13:56:29 INFO    [markets] 35 niche markets tracked (of 500 fetched, 3 wide-spread rejected)
+13:58:53 WARNING [classifier] LLM error: litellm.RateLimitError: RateLimitError: OpenrouterException - {"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations","provider_name":"Google AI Studio","is_byok":false,"provider_error_code":"429","limit_source":"upstream_provider_shared_pool","remedy_hint":"Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"}},"user_id":"user_3B48CUVR3fBeZMoxcPOxAy2dGQ4"} — falling back to keywords
+13:58:54 WARNING [classifier] LLM error: litellm.RateLimitError: RateLimitError: OpenrouterException - {"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations","provider_name":"Google AI Studio","is_byok":false,"provider_error_code":"429","limit_source":"upstream_provider_shared_pool","remedy_hint":"Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"}},"user_id":"user_3B48CUVR3fBeZMoxcPOxAy2dGQ4"} — falling back to keywords
+13:58:54 WARNING [classifier] LLM failed 3x — disabling LLM for this session, keyword fallback only (RateLimitError)
+13:59:45 INFO    Downloading checkpoint from Hugging Face repo google/timesfm-2.5-200m-pytorch
+13:59:52 INFO    Loading checkpoint from: C:\Users\HP\.cache\huggingface\hub\models--google--timesfm-2.5-200m-pytorch\snapshots\1d952420fba87f3c6dee4f240de0f1a0fbc790e3\model.safetensors
+14:00:10 INFO    When compiling, max horizon needs to be multiple of the output patch size 128. Using max horizon = 128 instead.
+14:00:10 INFO    [timesfm] model ready in 25.5s (CPU, 200M)
+14:00:48 INFO    [timesfm] batch: 30 markets in 38.5s (1.28s/mkt)
+14:01:09 INFO    [quant] BEARISH str=0.35 (mom=+0.02 mrev=-1.00 flow=-1.00 tfm=-0.03) — "Will the Republican Party win the NC-14 House"
+14:02:03 INFO    [markets] spread filter: 38 → 36 (rejected 2 wide-spread)
+14:02:03 INFO    [markets] 36 niche markets tracked (of 500 fetched, 2 wide-spread rejected)
+14:02:21 INFO    [timesfm] batch: 1 markets in 16.4s (16.40s/mkt)
+14:02:34 INFO    [quant] BEARISH str=0.35 (mom=+0.02 mrev=-1.00 flow=-1.00 tfm=-0.03) — "Will the Republican Party win the NC-14 House"
+14:02:59 INFO    [quant] BEARISH str=0.35 (mom=+0.02 mrev=-1.00 flow=-1.00 tfm=-0.03) — "Will the Republican Party win the NC-14 House"
+14:04:03 INFO    [quant] BEARISH str=0.35 (mom=+0.02 mrev=-1.00 flow=-1.00 tfm=-0.03) — "Will the Republican Party win the NC-14 House"

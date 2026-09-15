@@ -1,0 +1,32 @@
+name: Loop Trading Position Management
+
+on:
+  schedule:
+    - cron: '*/1 * * * *'
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  run-loop:
+    runs-on: self-hosted
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install UV
+        run: pip install uv
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Run loop iteration
+        run: python starters/trading-position-mgmt/run_position_mgmt.py --once
+        env:
+          LOOP_PATTERN: trading-position-mgmt
+          LOOP_LEVEL: L1
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loop-logs-trading-position-mgmt
+          path: logs/
