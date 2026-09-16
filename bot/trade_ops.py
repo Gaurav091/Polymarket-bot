@@ -23,7 +23,20 @@ TAKE_PROFIT_PCT = 0.18
 STOP_LOSS_PCT = 0.25
 REENTRY_COOLDOWN_MIN = 8
 POSITION_MAX_AGE = config.POSITION_TIMEOUT_MINUTES or 99999
-BLOCKED_HOURS_UTC = frozenset(range(1, 7))
+# Polymarket trades 24/7 — no blocked hours (was range(1,7) for US markets)
+BLOCKED_HOURS_UTC: frozenset[int] = frozenset()
+
+
+def _parse_dt(val) -> datetime:
+    """Parse a datetime from SQLite (string or datetime object)."""
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, str):
+        dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    return datetime.now(timezone.utc)
 
 
 def _handle_dead_market(bot, row):
@@ -33,9 +46,7 @@ def _handle_dead_market(bot, row):
     bot._dead_market_fails[key] = fails
     if fails < 10:
         return
-    entered = row["entry_at"]
-    if entered.tzinfo is None:
-        entered = entered.replace(tzinfo=timezone.utc)
+    entered = _parse_dt(row["entry_at"])
     age_min = (datetime.now(timezone.utc) - entered).total_seconds() / 60
     if age_min < POSITION_MAX_AGE:
         return
@@ -68,21 +79,35 @@ def _position_exit(bot, row, prices, entry, side, age_min, tp_move, sl_move):
     return None
 
 
+def _watcher_prices(bot, market_id: str):
+    """Look up real-time prices for a market via the watcher.
+    Returns (yes_price, no_price) or None if unavailable."""
+    if not bot.watcher:
+        return None
+    for m in bot.markets:
+        if m.condition_id == market_id:
+            tid = m.token_id("YES")
+            if tid:
+                update = bot.watcher.get_latest(tid)
+                if update is not None:
+                    return (update.yes_price, update.no_price)
+            break
+    return None
+
+
 def monitor_positions(bot):
     """Check all open positions for TP/SL/timeout/exit conditions."""
     for row in journal.get_open_trades():
         entry = row["entry_price"]
         side = row["side"]
-        prices = bot.watcher.get_prices(row["market_id"]) if bot.watcher else None
+        prices = _watcher_prices(bot, row["market_id"])
         if prices is None:
             _handle_dead_market(bot, row)
             continue
         yes_now = prices[0]
         bot.regimes.update_market(row["market_id"], yes_now,
                                   resolved=is_resolved(yes_now, prices[1]))
-        entered = row["entry_at"]
-        if entered.tzinfo is None:
-            entered = entered.replace(tzinfo=timezone.utc)
+        entered = _parse_dt(row["entry_at"])
         age_min = (datetime.now(timezone.utc) - entered).total_seconds() / 60
         tp_move = min(0.08, max(0.03, entry * TAKE_PROFIT_PCT))
         sl_floor = max(0.02, entry * 0.10)
@@ -124,36 +149,49 @@ def _maybe_trade(bot, signal):
     """Evaluate and execute a trade signal if all gates pass."""
     log = __import__("logging").getLogger(__name__)
     if signal.market_price < config.MIN_ENTRY_PRICE:
-        return
+        # For bearish signals, entry is on NO side (1 - market_price)
+        entry = signal.market_price if signal.side == "YES" else 1.0 - signal.market_price
+        if entry < config.MIN_ENTRY_PRICE:
+            log.info(f"[trade] SKIP {signal.side} {signal.market.question[:40]} — "
+                     f"entry={entry:.2f} (min={config.MIN_ENTRY_PRICE})")
+            return
+        # market_price is low but entry (NO side) is above threshold — allow
     utc_hour = datetime.now(timezone.utc).hour
     if utc_hour in BLOCKED_HOURS_UTC:
+        log.info(f"[trade] skip — blocked hour {utc_hour}")
         return
     if not bot.regimes.can_trade(signal.market.condition_id):
-        log.debug(f"[regime] skip {signal.market.condition_id[:10]} — EVENT cooloff")
+        log.info(f"[trade] SKIP regime-cooloff {signal.market.question[:40]}")
         return
     open_ids = {r["market_id"] for r in journal.get_open_trades()}
     if signal.market.condition_id in open_ids:
+        log.info(f"[trade] skip {signal.market.condition_id[:10]} — already open")
         return
     on_cooldown = getattr(bot.learner, "_reentry_cooldown", {})
     if signal.market.condition_id in on_cooldown:
+        log.info(f"[trade] skip {signal.market.condition_id[:10]} — cooldown")
         return
     blocked = getattr(bot.learner, "_loss_blocked", {})
     if signal.market.condition_id in blocked:
+        log.info(f"[trade] skip {signal.market.condition_id[:10]} — loss-blocked")
         return
     open_count = len(open_ids)
     if open_count >= config.MAX_OPEN_POSITIONS:
+        log.info(f"[trade] skip — {open_count} open >= max {config.MAX_OPEN_POSITIONS}")
         return
     if bot.risk.state.halted:
+        log.info(f"[trade] SKIP risk-halted: {bot.risk.state.halt_reason}")
         return
     recent = get_recent_results(5)
     wins = recent.count("win")
     losses = recent.count("loss")
     risk_mult = bot.risk.position_size_multiplier(wins, losses)
-    learner_mult = bot.learner.position_size_multiplier()
+    learner_mult = bot.learner.get_position_size_adjustment()
     signal.bet_amount = round(
         max(config.MIN_BET_USD, signal.bet_amount) * risk_mult * learner_mult, 2
     )
     if signal.bet_amount < config.MIN_BET_USD:
+        log.info(f"[trade] SKIP bet ${signal.bet_amount:.2f} < MIN ${config.MIN_BET_USD}")
         return
     result = execute_trade(signal)
     if result["status"] == "executed":
@@ -176,4 +214,4 @@ def _maybe_trade(bot, signal):
         except Exception:
             pass
     else:
-        log.debug(f"[trade] rejected: {result}")
+        log.info(f"[trade] REJECTED {signal.side} {signal.market.question[:40]} — {result}")

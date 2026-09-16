@@ -50,7 +50,7 @@ def quant_signal_for(market, tfm_scores: dict, emergency: bool, learner):
         return None, qs
     classification = Classification(
         direction=qs.direction,
-        materiality=min(0.65, qs.strength * 1.2),
+        materiality=min(0.90, qs.strength * 2.5),
         reasoning=f"quant: mom={qs.momentum} mrev={qs.mean_rev} flow={qs.flow} tfm={qs.timesfm}",
         latency_ms=0,
         model="python-quant",
@@ -77,6 +77,7 @@ def run_quant_scan(bot):
     started = time.time()
     scan_markets = bot.markets[:30]
     tfm_scores = timesfm_scores(scan_markets)
+    evaluated: list[tuple[float, str, str, str]] = []  # (strength, dir, q_short, token)
     for market in scan_markets:
         if time.time() - started > budget:
             log.debug("[quant] scan budget exhausted — deferring rest to next cycle")
@@ -86,6 +87,9 @@ def run_quant_scan(bot):
             signal, qs = quant_signal_for(
                 market, tfm_scores, emergency, bot.learner,
             )
+            token = market.token_id("YES") or "?"
+            q_short = market.question[:40]
+            evaluated.append((qs.strength, qs.direction, q_short, token[:8]))
             if signal:
                 bot.stats["signals"] += 1
                 log.info(
@@ -93,11 +97,17 @@ def run_quant_scan(bot):
                     f"(mom={qs.momentum:+.2f} mrev={qs.mean_rev:+.2f} "
                     f"flow={qs.flow:+.2f} tfm={qs.timesfm:+.2f})"
                     f"{' [EMERGENCY]' if emergency else ''}"
-                    f" — \"{market.question[:45]}\""
+                    f" — \"{q_short}\""
                 )
                 bot._maybe_trade(signal)
         except Exception as e:
-            log.debug(f"[quant] scan error: {e}")
+            log.warning(f"[quant] scan error: {e}")
+    # Diagnostic: show top-3 signals even if below threshold
+    if evaluated and not any(s > 0 for s, *_ in evaluated if s > config.QUANT_MIN_STRENGTH):
+        evaluated.sort(key=lambda x: x[0], reverse=True)
+        top3 = evaluated[:3]
+        strengths = " | ".join(f"{d} {s:.3f} {q[:25]}" for s, d, q, _ in top3)
+        log.info(f"[quant] no signal above {config.QUANT_MIN_STRENGTH} — top: {strengths}")
 
 
 def run_arb_scan(bot):
@@ -118,15 +128,21 @@ def run_news_scan(bot):
     """Poll news, match to markets, classify, and fire trades."""
     events = bot.news.poll()
     if not events:
+        log.debug("[news] no new events")
         return
     bot.stats["news"] += len(events)
+    matched_total = 0
+    neutral_count = 0
+    edge_reject = 0
     for event in events:
         matched = match_news_to_markets(event.headline, bot.markets)
         bot.stats["matched"] += len(matched)
+        matched_total += len(matched)
         for market in matched[:3]:
             try:
                 classification = classify(event.headline, market, event.source)
                 if classification.direction == "neutral":
+                    neutral_count += 1
                     continue
                 emergency = bot.survival.is_critical()
                 signal = detect_edge(
@@ -137,8 +153,14 @@ def run_news_scan(bot):
                     effective_materiality_threshold=bot.learner.get_effective_materiality_threshold("news"),
                 )
                 if signal is None:
+                    edge_reject += 1
                     continue
                 bot.stats["signals"] += 1
                 bot._maybe_trade(signal)
             except Exception as e:
                 log.warning(f"[pipeline] error: {e}")
+    if matched_total > 0:
+        log.info(
+            f"[news] {len(events)} events → {matched_total} matched "
+            f"({neutral_count} neutral, {edge_reject} edge-reject)"
+        )
