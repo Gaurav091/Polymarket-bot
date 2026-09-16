@@ -64,13 +64,12 @@ class SurvivalBot:
         self._api_attempts = 0
         self._api_errors = 0
         self._dead_market_fails: dict[str, int] = {}
+        self._market_losses: dict[str, int] = {}  # market_id → loss count
+        self._market_questions: dict[str, str] = {}  # market_id → question text (for change detection)
         self._last_cal_check = 0.0
         self.stats = {"news": 0, "matched": 0, "signals": 0, "trades": 0, "closes": 0}
         self.current_state = VitalState.BOOT
 
-    # ------------------------------------------------------------
-    # Circuit breaker (poly-maker pattern)
-    # ------------------------------------------------------------
     def _note_api_result(self, ok: bool):
         self._api_attempts += 1
         if not ok:
@@ -82,9 +81,8 @@ class SurvivalBot:
             return 0.0
         return self._api_errors / self._api_attempts
 
-    # ------------------------------------------------------------
-    # Market cache
-    # ------------------------------------------------------------
+
+
     def refresh_markets(self):
         if time.time() - self.last_market_refresh < 300:  # 5 min cache
             return
@@ -93,6 +91,9 @@ class SurvivalBot:
         # Feed price observations into the regime machine (event detection)
         for m in all_markets:
             self.regimes.observe(m.condition_id, m.yes_price, resolved=is_resolved(m.yes_price, m.no_price))
+        # Reset circuit breaker for markets whose question text has changed
+        from .breaker import check_question_changes
+        check_question_changes(self, all_markets)
         self.markets = filter_niche(all_markets)
         # Phase 2: spread filter — reject wide-spread markets
         before_count = len(self.markets)
@@ -111,9 +112,6 @@ class SurvivalBot:
                 token_ids.append(tid)
         self.watcher.watch_tokens(token_ids)
 
-    # ------------------------------------------------------------
-    # Quant scan — Python-native signals, no LLM, no news needed
-    # ------------------------------------------------------------
     def _timesfm_scores(self, scan_markets: list) -> dict:
         """Batched TimesFM forecast (delegated to scanners.py)."""
         return scanners.timesfm_scores(scan_markets)
@@ -128,16 +126,10 @@ class SurvivalBot:
         """Score tracked markets (delegated to scanners.py)."""
         scanners.run_quant_scan(self)
 
-    # ------------------------------------------------------------
-    # Kalshi cross-platform arbitrage scan
-    # ------------------------------------------------------------
     def arb_scan(self):
         """Check for guaranteed arbitrage (delegated to scanners.py)."""
         scanners.run_arb_scan(self)
 
-    # ------------------------------------------------------------
-    # News → signal → trade
-    # ------------------------------------------------------------
     def process_news(self):
         """Poll news and fire trades (delegated to scanners.py)."""
         scanners.run_news_scan(self)
@@ -145,9 +137,6 @@ class SurvivalBot:
     def _maybe_trade(self, signal):
         return trade_ops._maybe_trade(self, signal)
 
-    # ------------------------------------------------------------
-    # Position monitoring — this is where profit is realized
-    # ------------------------------------------------------------
     def _handle_dead_market(self, row):
         return trade_ops._handle_dead_market(self, row)
 
@@ -161,9 +150,6 @@ class SurvivalBot:
                tp_move: float = 0.0, sl_move: float = 0.0):
         return trade_ops._close(self, trade_id, exit_yes_price, reason, row, tp_move, sl_move)
 
-    # ------------------------------------------------------------
-    # Main loop — extracted helpers to keep run() under complexity limit
-    # ------------------------------------------------------------
     def _run_heartbeat(self) -> VitalState:
         state = self.survival.check()
         self.current_state = state
@@ -226,6 +212,10 @@ class SurvivalBot:
             self.watcher.start()
         except Exception as e:
             log.debug(f"[watcher] failed to start: {e}")
+
+        # Load historical market losses from DB on startup
+        from .breaker import load_market_losses
+        load_market_losses(self)
 
         while True:
             loop_start = time.time()

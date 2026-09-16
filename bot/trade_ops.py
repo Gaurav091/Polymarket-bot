@@ -118,17 +118,32 @@ def monitor_positions(bot):
             _close(bot, row["id"], yes_now, reason, row, tp_move=tp_rec, sl_move=sl_rec)
 
 
+def _find_token_id(bot, row) -> str | None:
+    """Find the token ID for a market position."""
+    if row is None:
+        return None
+    for m in bot.markets:
+        if m.condition_id == row["market_id"]:
+            return m.token_id(row["side"])
+    return None
+
+
+def _track_loss(bot, row):
+    """Increment per-market loss counter; log if circuit breaker trips."""
+    if row is None:
+        return
+    mid = row["market_id"]
+    losses = bot._market_losses.get(mid, 0) + 1
+    bot._market_losses[mid] = losses
+    if losses >= config.MARKET_LOSS_LIMIT:
+        log.warning(f"[breaker] {mid[:8]} hit {losses} losses — blocked until question changes")
+
+
 def _close(bot, trade_id: int, exit_yes_price: float, reason: str, row=None,
            tp_move: float = 0.0, sl_move: float = 0.0):
     """Close a position and update survival/learner state."""
-    token_id = None
-    shares = None
-    if row is not None:
-        shares = row["shares"]
-        for m in bot.markets:
-            if m.condition_id == row["market_id"]:
-                token_id = m.token_id(row["side"])
-                break
+    shares = row["shares"] if row else None
+    token_id = _find_token_id(bot, row)
     pnl = close_position(trade_id, exit_yes_price, reason,
                         token_id=token_id, shares=shares,
                         entry_row=row, tp_move=tp_move, sl_move=sl_move)
@@ -139,6 +154,7 @@ def _close(bot, trade_id: int, exit_yes_price: float, reason: str, row=None,
     else:
         bot.survival.record_loss(pnl)
         log.info(f"[close] {reason} ${pnl:.2f}")
+        _track_loss(bot, row)
     try:
         bot.learner.update_on_close(pnl, reason)
     except Exception:
@@ -162,9 +178,9 @@ def _check_trade_gates(bot, signal, open_ids: set) -> str | None:
     cooldown = getattr(bot.learner, "_reentry_cooldown", {})
     if signal.market.condition_id in cooldown:
         return "cooldown"
-    blocked = getattr(bot.learner, "_loss_blocked", {})
+    blocked = bot._market_losses
     if signal.market.condition_id in blocked:
-        return "loss-blocked"
+        return f"loss-blocked ({blocked[signal.market.condition_id]} losses)"
     if len(open_ids) >= config.MAX_OPEN_POSITIONS:
         return f"{len(open_ids)} open >= max {config.MAX_OPEN_POSITIONS}"
     if bot.risk.state.halted:
