@@ -54,7 +54,9 @@ def _handle_dead_market(bot, row):
         f"[monitor] market {key[:10]} unreachable {fails}x "
         f"and age {age_min:.0f}m ≥ {POSITION_MAX_AGE}m — closing at entry"
     )
-    close_position(row["id"], row["entry_price"], "dead_market",
+    # entry_price is held-side price; close_position expects YES-side price
+    exit_yes = row["entry_price"] if row["side"] == "YES" else 1.0 - row["entry_price"]
+    close_position(row["id"], exit_yes, "dead_market",
                    token_id=None, shares=row["shares"],
                    entry_row=row, tp_move=0.0, sl_move=0.0)
 
