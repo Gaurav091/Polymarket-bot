@@ -145,47 +145,45 @@ def _close(bot, trade_id: int, exit_yes_price: float, reason: str, row=None,
         pass
 
 
+def _check_trade_gates(bot, signal, open_ids: set) -> str | None:
+    """Return a rejection reason if any gate blocks the trade, else None."""
+    if signal.market_price < config.MIN_ENTRY_PRICE:
+        entry = (signal.market_price if signal.side == "YES"
+                 else 1.0 - signal.market_price)
+        if entry < config.MIN_ENTRY_PRICE:
+            return f"entry={entry:.2f} (min={config.MIN_ENTRY_PRICE})"
+    utc_hour = datetime.now(timezone.utc).hour
+    if utc_hour in BLOCKED_HOURS_UTC:
+        return f"blocked hour {utc_hour}"
+    if not bot.regimes.can_trade(signal.market.condition_id):
+        return "regime-cooloff"
+    if signal.market.condition_id in open_ids:
+        return "already open"
+    cooldown = getattr(bot.learner, "_reentry_cooldown", {})
+    if signal.market.condition_id in cooldown:
+        return "cooldown"
+    blocked = getattr(bot.learner, "_loss_blocked", {})
+    if signal.market.condition_id in blocked:
+        return "loss-blocked"
+    if len(open_ids) >= config.MAX_OPEN_POSITIONS:
+        return f"{len(open_ids)} open >= max {config.MAX_OPEN_POSITIONS}"
+    if bot.risk.state.halted:
+        return f"risk-halted: {bot.risk.state.halt_reason}"
+    return None
+
+
 def _maybe_trade(bot, signal):
     """Evaluate and execute a trade signal if all gates pass."""
     log = __import__("logging").getLogger(__name__)
-    if signal.market_price < config.MIN_ENTRY_PRICE:
-        # For bearish signals, entry is on NO side (1 - market_price)
-        entry = signal.market_price if signal.side == "YES" else 1.0 - signal.market_price
-        if entry < config.MIN_ENTRY_PRICE:
-            log.info(f"[trade] SKIP {signal.side} {signal.market.question[:40]} — "
-                     f"entry={entry:.2f} (min={config.MIN_ENTRY_PRICE})")
-            return
-        # market_price is low but entry (NO side) is above threshold — allow
-    utc_hour = datetime.now(timezone.utc).hour
-    if utc_hour in BLOCKED_HOURS_UTC:
-        log.info(f"[trade] skip — blocked hour {utc_hour}")
-        return
-    if not bot.regimes.can_trade(signal.market.condition_id):
-        log.info(f"[trade] SKIP regime-cooloff {signal.market.question[:40]}")
-        return
     open_ids = {r["market_id"] for r in journal.get_open_trades()}
-    if signal.market.condition_id in open_ids:
-        log.info(f"[trade] skip {signal.market.condition_id[:10]} — already open")
-        return
-    on_cooldown = getattr(bot.learner, "_reentry_cooldown", {})
-    if signal.market.condition_id in on_cooldown:
-        log.info(f"[trade] skip {signal.market.condition_id[:10]} — cooldown")
-        return
-    blocked = getattr(bot.learner, "_loss_blocked", {})
-    if signal.market.condition_id in blocked:
-        log.info(f"[trade] skip {signal.market.condition_id[:10]} — loss-blocked")
-        return
-    open_count = len(open_ids)
-    if open_count >= config.MAX_OPEN_POSITIONS:
-        log.info(f"[trade] skip — {open_count} open >= max {config.MAX_OPEN_POSITIONS}")
-        return
-    if bot.risk.state.halted:
-        log.info(f"[trade] SKIP risk-halted: {bot.risk.state.halt_reason}")
+    reject = _check_trade_gates(bot, signal, open_ids)
+    if reject:
+        log.info(f"[trade] skip {signal.market.question[:40]} — {reject}")
         return
     recent = get_recent_results(5)
-    wins = recent.count("win")
-    losses = recent.count("loss")
-    risk_mult = bot.risk.position_size_multiplier(wins, losses)
+    risk_mult = bot.risk.position_size_multiplier(
+        recent.count("win"), recent.count("loss"),
+    )
     learner_mult = bot.learner.get_position_size_adjustment()
     signal.bet_amount = round(
         max(config.MIN_BET_USD, signal.bet_amount) * risk_mult * learner_mult, 2
@@ -193,6 +191,11 @@ def _maybe_trade(bot, signal):
     if signal.bet_amount < config.MIN_BET_USD:
         log.info(f"[trade] SKIP bet ${signal.bet_amount:.2f} < MIN ${config.MIN_BET_USD}")
         return
+    _execute_and_log(bot, signal)
+
+
+def _execute_and_log(bot, signal):
+    """Execute trade and log result."""
     result = execute_trade(signal)
     if result["status"] == "executed":
         bot.stats["trades"] += 1
