@@ -143,6 +143,11 @@ RSS_FEEDS = [
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))
 NEWS_POLL_SECONDS = int(os.getenv("NEWS_POLL_SECONDS", "45"))
 
+# Polymarket taker fee rate by category (see polymarket.com/fees)
+# fee = shares * feeRate * price * (1 - price)
+# Default 0.04 covers Politics/Tech/Mentions; override via env
+POLY_FEE_RATE = float(os.getenv("POLY_FEE_RATE", "0.04"))
+
 # SQLite journal
 DB_PATH = ROOT / "data" / "trades.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)

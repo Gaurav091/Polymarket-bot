@@ -80,8 +80,7 @@ def init_db():
         ("holding_minutes", "REAL"),
         ("tp_hit", "INTEGER"),
         ("sl_hit", "INTEGER"),
-        ("exit_reason", "TEXT"),
-    ]:
+        ("exit_reason", "TEXT"),        ("fees_paid", "REAL"),    ]:
         try:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type}")
             conn.commit()
@@ -146,8 +145,16 @@ def log_trade_close(
     # Convert YES exit price to the held side's price
     exit_held_price = exit_yes_price if side == "YES" else 1.0 - exit_yes_price
 
-    # PnL: bought shares at entry, now worth exit_held_price each
-    pnl = (exit_held_price - entry) * shares
+    # Gross PnL: bought shares at entry, now worth exit_held_price each
+    gross_pnl = (exit_held_price - entry) * shares
+
+    # Polymarket taker fee: fee = shares * feeRate * p * (1-p)
+    # Applied on both entry and exit (market orders = taker)
+    fr = config.POLY_FEE_RATE
+    entry_fee = shares * fr * entry * (1 - entry)
+    exit_fee = shares * fr * exit_held_price * (1 - exit_held_price)
+    total_fee = entry_fee + exit_fee
+    pnl = gross_pnl - total_fee
 
     # Compute holding_minutes, tp_hit, sl_hit if price path data available
     holding_minutes = None
@@ -172,14 +179,14 @@ def log_trade_close(
         conn.execute(
             """UPDATE trades SET status = ?, exit_price = ?, exit_at = ?,
                pnl_usd = ?, holding_minutes = ?, tp_hit = ?, sl_hit = ?,
-               exit_reason = ? WHERE id = ?""",
-            (status, exit_held_price, now_iso, pnl, holding_minutes, tp_hit, sl_hit, status, trade_id),
+               exit_reason = ?, fees_paid = ? WHERE id = ?""",
+            (status, exit_held_price, now_iso, pnl, holding_minutes, tp_hit, sl_hit, status, total_fee, trade_id),
         )
     else:
         conn.execute(
             """UPDATE trades SET status = ?, exit_price = ?, exit_at = ?,
-               pnl_usd = ?, exit_reason = ? WHERE id = ?""",
-            (status, exit_held_price, now_iso, pnl, status, trade_id),
+               pnl_usd = ?, exit_reason = ?, fees_paid = ? WHERE id = ?""",
+            (status, exit_held_price, now_iso, pnl, status, total_fee, trade_id),
         )
     conn.commit()
     conn.close()

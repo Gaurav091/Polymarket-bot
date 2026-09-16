@@ -64,7 +64,9 @@ tid = journal.log_trade_open(
     materiality=0.8,
 )
 pnl = journal.log_trade_close(tid, 0.70, "take_profit")
-assert abs(pnl - 2.0) < 0.01, f"expected ~2.0 pnl, got {pnl}"
+# Fees: entry=10*0.04*0.50*0.50=0.10, exit=10*0.04*0.70*0.30=0.084 → fee=0.184
+# Gross PnL=2.00, net=1.816
+assert abs(pnl - 1.82) < 0.05, f"expected ~1.82 pnl (after fees), got {pnl}"
 print(f"PASS: journal round-trip (pnl={pnl:.2f})")
 
 # --- Test 7: edge sizing ---
@@ -104,7 +106,9 @@ tid2 = journal.log_trade_open(
 # Bought NO at 0.70 (YES was 0.30). YES drops to 0.20 → NO now worth 0.80.
 # Correct PnL: (0.80 - 0.70) * 10 = +$1.00 (old buggy code gave +$5.00)
 pnl_no = journal.log_trade_close(tid2, 0.20, "take_profit")
-assert abs(pnl_no - 1.0) < 0.01, f"NO-side PnL wrong: expected 1.0, got {pnl_no}"
+# Fees: entry=10*0.04*0.70*0.30=0.084, exit=10*0.04*0.80*0.20=0.064 → fee=0.148
+# Gross PnL=1.00, net=0.852
+assert abs(pnl_no - 0.85) < 0.05, f"NO-side PnL wrong: expected ~0.85, got {pnl_no}"
 print(f"PASS: NO-side PnL correct (got {pnl_no:.2f}, old code gave 5.00)")
 
 # --- Test 11: tick rounding ---
