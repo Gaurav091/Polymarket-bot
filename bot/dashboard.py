@@ -32,7 +32,8 @@ def get_dashboard_data() -> dict:
         conn.execute(
             """SELECT id, market_question, side, entry_price, exit_price,
                       amount_usd, shares, status, entry_at, exit_at, pnl_usd,
-                      edge, classification, materiality, reasoning, headline
+                      edge, classification, materiality, reasoning, headline,
+                      fees_paid
                FROM trades ORDER BY id DESC LIMIT 200"""
         ).fetchall()
     )
@@ -59,6 +60,9 @@ def get_dashboard_data() -> dict:
         """SELECT COALESCE(SUM(pnl_usd), 0) AS pnl FROM trades
            WHERE status != 'open' AND strftime('%Y-%m', exit_at) = strftime('%Y-%m', 'now')"""
     ).fetchone()
+    total_fees = conn.execute(
+        "SELECT COALESCE(SUM(fees_paid), 0) AS fees FROM trades WHERE fees_paid IS NOT NULL"
+    ).fetchone()["fees"]
 
     # Equity curve: cumulative PnL over closed trades, oldest first
     curve = _rows_to_dicts(
@@ -91,6 +95,7 @@ def get_dashboard_data() -> dict:
             "month_pnl": round(float(month_pnl["pnl"]), 2),
             "open_positions": open_count["n"],
             "open_exposure": round(float(open_count["exposure"]), 2),
+            "total_fees": round(float(total_fees), 2),
         },
         "equity_curve": curve,
         "survival_events": events,

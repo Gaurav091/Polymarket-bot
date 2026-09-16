@@ -29,8 +29,8 @@ logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("litellm").setLevel(logging.WARNING)
 log = logging.getLogger("survival-bot")
 
-TAKE_PROFIT_PCT = 0.18
-STOP_LOSS_PCT = 0.25
+TAKE_PROFIT_PCT = 0.15  # tightened from 0.18 — faster exits
+STOP_LOSS_PCT = 0.18    # tightened from 0.25 — cut losers quicker
 REENTRY_COOLDOWN_MIN = 8
 POSITION_MAX_AGE = config.POSITION_TIMEOUT_MINUTES or 99999
 

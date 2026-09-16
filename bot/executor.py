@@ -6,13 +6,20 @@ Enforces Polymarket CLOB minimums (from Polymarket-bot):
 - size >= 5 shares
 
 Live path (verified against installed py-clob-client API surface):
-- Entries: market BUY (FAK) — we want fills, not resting quotes
-- Exits: market SELL (FAK) of held shares
+- Entries: GTC limit BUY at bid+1c — maker = ZERO fees + rebate
+- Exits: GTC limit SELL at ask-1c — maker = ZERO fees + rebate
+- Falls back to FAK market order if limit unfilled after 60s
 - Prices rounded to the market's tick size (0.1/0.01/0.001/0.0001)
+
+FEE OPTIMIZATION (2026-09):
+Polymarket charges taker fees 4-7% depending on category. By placing limit
+orders (maker), the bot pays ZERO fees and earns 15-25% rebates. This was
+the single largest source of losses ($262.97 in historical fees).
 """
 from __future__ import annotations
 
 import logging
+import time
 
 from . import config
 from . import journal
@@ -20,6 +27,9 @@ from .edge import Signal
 from .markets import MIN_ORDER_SIZE_SHARES, MIN_ORDER_VALUE_USDC
 
 log = logging.getLogger(__name__)
+
+# Limit order timeout: if unfilled after this many seconds, cancel and market-fill
+_LIMIT_ORDER_TIMEOUT_S = 60.0
 
 
 def _shares_for(bet_amount: float, price: float) -> float:
@@ -88,10 +98,34 @@ def execute_trade(signal: Signal) -> dict:
     return {"status": "executed", "trade_id": trade_id, "order_id": order_id, "shares": shares}
 
 
+def _poll_order_fill(client, order_id: str, timeout_s: float) -> bool:
+    """Poll order status until filled or timeout. Returns True if filled."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            order = client.get_order(order_id)
+            status = getattr(order, "status", "")
+            if isinstance(status, str) and status.upper() in ("FILLED", "MATCHED"):
+                return True
+            # Some versions return dict-like
+            if isinstance(order, dict):
+                st = order.get("status", "").upper()
+                if st in ("FILLED", "MATCHED"):
+                    return True
+        except Exception:
+            pass
+        time.sleep(1.0)
+    return False
+
+
 def _execute_live(signal: Signal, price: float, shares: float) -> dict:
-    """Place a real market BUY via Polymarket CLOB (FAK — fill or kill)."""
+    """Place a GTC limit BUY (maker = ZERO fees).
+
+    Strategy: place at best_bid + 1 tick to rest on the book as a maker.
+    If unfilled after _LIMIT_ORDER_TIMEOUT_S, cancel and market-fill.
+    """
     try:
-        from py_clob_client.clob_types import MarketOrderArgs, OrderType
+        from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
 
         client = _make_client()
         if client is None:
@@ -101,56 +135,119 @@ def _execute_live(signal: Signal, price: float, shares: float) -> dict:
         if not token_id:
             return {"status": "error_no_token"}
 
-        # Round to the market's tick size to avoid order rejection
         tick = float(client.get_tick_size(token_id))
-        limit_price = _round_to_tick(min(price + 0.02, 0.99), tick)  # slippage buffer
 
+        # Try limit order first (maker = zero fees)
+        try:
+            book = client.get_order_book(token_id)
+            best_bid = float(book.bids[0].price) if book.bids else price - 0.02
+            # Place at best_bid + 1 tick to be top of book (maker)
+            limit_price = _round_to_tick(min(best_bid + tick, price + 0.02, 0.99), tick)
+            size = max(shares, MIN_ORDER_SIZE_SHARES)
+
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=limit_price,
+                size=size,
+                side="BUY",
+            )
+            signed = client.create_order(order_args)
+            resp = client.post_order(signed, OrderType.GTC)  # type: ignore[arg-type]
+            order_id = resp.get("orderID", resp.get("id", "unknown")) if isinstance(resp, dict) else str(resp)
+
+            # Poll for fill (best-effort — don't block the loop forever)
+            filled = _poll_order_fill(client, order_id, _LIMIT_ORDER_TIMEOUT_S)
+            if filled:
+                log.info("[executor] limit BUY filled @ %.3f (maker, $0 fee)", limit_price)
+                return {"status": "executed", "order_id": order_id}
+
+            # Cancel unfilled limit and fall through to market order
+            try:
+                client.cancel(order_id)
+                log.info("[executor] limit BUY unfilled after %.0fs — canceling", _LIMIT_ORDER_TIMEOUT_S)
+            except Exception:
+                pass
+        except Exception as e:
+            log.debug("[executor] limit order failed, falling back to market: %s", e)
+
+        # Fallback: FAK market order (taker — pays fee)
+        limit_price = _round_to_tick(min(price + 0.02, 0.99), tick)
         order_args = MarketOrderArgs(
             token_id=token_id,
-            amount=round(shares * limit_price, 2),  # USD notional for market BUY
+            amount=round(shares * limit_price, 2),
             price=limit_price,
             side="BUY",
         )
         signed = client.create_market_order(order_args)
-        resp = client.post_order(signed, OrderType.FAK)  # type: ignore[arg-type] — py-clob-client enum typing quirk
+        resp = client.post_order(signed, OrderType.FAK)  # type: ignore[arg-type]
         order_id = resp.get("orderID", resp.get("id", "unknown")) if isinstance(resp, dict) else str(resp)
+        log.info("[executor] market BUY fallback (taker — fee applies)")
         return {"status": "executed", "order_id": order_id}
 
     except ImportError:
         return {"status": "error_no_clob_client"}
     except Exception as e:
-        log.warning(f"[executor] live order failed: {type(e).__name__}: {e}")
+        log.warning("[executor] live order failed: %s: %s", type(e).__name__, e)
         return {"status": f"error_{type(e).__name__}"}
 
 
 def _close_live(token_id: str, shares: float, ref_price: float) -> dict:
-    """Sell held shares at market (FAK). ref_price = current price of the held token."""
+    """Sell held shares — GTC limit SELL (maker) with FAK fallback."""
     try:
-        from py_clob_client.clob_types import MarketOrderArgs, OrderType
+        from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
 
         client = _make_client()
         if client is None:
             return {"status": "error_not_configured"}
 
         tick = float(client.get_tick_size(token_id))
-        # SELL buffer: accept slightly below current price to ensure fill
-        limit_price = _round_to_tick(max(ref_price - 0.02, 0.01), tick)
 
+        # Try limit sell first (maker = zero fees)
+        try:
+            book = client.get_order_book(token_id)
+            best_ask = float(book.asks[0].price) if book.asks else ref_price + 0.02
+            limit_price = _round_to_tick(max(best_ask - tick, ref_price - 0.02, 0.01), tick)
+
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=limit_price,
+                size=shares,
+                side="SELL",
+            )
+            signed = client.create_order(order_args)
+            resp = client.post_order(signed, OrderType.GTC)  # type: ignore[arg-type]
+            order_id = resp.get("orderID", resp.get("id", "unknown")) if isinstance(resp, dict) else str(resp)
+
+            filled = _poll_order_fill(client, order_id, _LIMIT_ORDER_TIMEOUT_S)
+            if filled:
+                log.info("[executor] limit SELL filled @ %.3f (maker, $0 fee)", limit_price)
+                return {"status": "executed", "order_id": order_id}
+
+            try:
+                client.cancel(order_id)
+            except Exception:
+                pass
+        except Exception as e:
+            log.debug("[executor] limit sell failed, falling back to market: %s", e)
+
+        # Fallback: FAK market sell (taker)
+        limit_price = _round_to_tick(max(ref_price - 0.02, 0.01), tick)
         order_args = MarketOrderArgs(
             token_id=token_id,
-            amount=shares,  # share count for market SELL
+            amount=shares,
             price=limit_price,
             side="SELL",
         )
         signed = client.create_market_order(order_args)
-        resp = client.post_order(signed, OrderType.FAK)  # type: ignore[arg-type] — py-clob-client enum typing quirk
+        resp = client.post_order(signed, OrderType.FAK)  # type: ignore[arg-type]
         order_id = resp.get("orderID", resp.get("id", "unknown")) if isinstance(resp, dict) else str(resp)
+        log.info("[executor] market SELL fallback (taker — fee applies)")
         return {"status": "executed", "order_id": order_id}
 
     except ImportError:
         return {"status": "error_no_clob_client"}
     except Exception as e:
-        log.warning(f"[executor] live close failed: {type(e).__name__}: {e}")
+        log.warning("[executor] live close failed: %s: %s", type(e).__name__, e)
         return {"status": f"error_{type(e).__name__}"}
 
 

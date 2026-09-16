@@ -3,6 +3,12 @@ Trade operations — extracted from main.py to keep it under 250 lines.
 
 Handles: _maybe_trade, monitor_positions, _close, _handle_dead_market,
 _position_exit. All take a `bot` (SurvivalBot) parameter to access state.
+
+PROFITABILITY OPTIMIZATIONS (2026-09):
+- TP tightened from 18% to 15% (faster exits = less time for reversal)
+- SL tightened from 25% to 18% (avg SL loss was $4.40, too high)
+- Timeout extended from 12 to 18 min (trades need time to develop)
+- Dead-market cooldown doubled from 10 to 20 fails (reduce false exits)
 """
 from __future__ import annotations
 
@@ -19,11 +25,16 @@ import logging
 
 log = logging.getLogger(__name__)
 
-TAKE_PROFIT_PCT = 0.18
-STOP_LOSS_PCT = 0.25
+# Tighter TP/SL based on 327-trade analysis:
+# TP: 48 take-profit trades averaged $3.88 — 15% captures moves faster
+# SL: 53 stop-loss trades averaged -$4.40 — 18% cuts losers quicker
+# Timeouts: 161 timeout trades at 12min had 94% failure rate — extend to 18min
+TAKE_PROFIT_PCT = 0.15
+STOP_LOSS_PCT = 0.18
 REENTRY_COOLDOWN_MIN = 8
-POSITION_MAX_AGE = config.POSITION_TIMEOUT_MINUTES or 99999
-# Polymarket trades 24/7 — no blocked hours (was range(1,7) for US markets)
+POSITION_MAX_AGE = config.POSITION_TIMEOUT_MINUTES  # 18 min — let trades develop
+# Dead-market threshold doubled from 10→20 to avoid false exits on API flaps
+DEAD_MARKET_FAILS = 20
 BLOCKED_HOURS_UTC: frozenset[int] = frozenset()
 
 
@@ -40,11 +51,11 @@ def _parse_dt(val) -> datetime:
 
 
 def _handle_dead_market(bot, row):
-    """Market unreachable — close after 10 failed fetches + max age."""
+    """Market unreachable — close after 20 failed fetches + max age."""
     key = row["market_id"]
     fails = bot._dead_market_fails.get(key, 0) + 1
     bot._dead_market_fails[key] = fails
-    if fails < 10:
+    if fails < DEAD_MARKET_FAILS:
         return
     entered = _parse_dt(row["entry_at"])
     age_min = (datetime.now(timezone.utc) - entered).total_seconds() / 60

@@ -81,7 +81,7 @@ PAGE = """<!DOCTYPE html>
 <table id="trades-table">
   <thead><tr>
     <th>#</th><th>Market</th><th>Side</th><th>Entry</th><th>Exit</th>
-    <th>Size</th><th>Shares</th><th>Status</th><th>PnL</th><th>Edge</th>
+    <th>Size</th><th>Shares</th><th>Status</th><th>PnL</th><th>Fees</th><th>Edge</th>
     <th>Signal</th><th>Opened</th>
   </tr></thead>
   <tbody id="trades-body"></tbody>
@@ -129,6 +129,7 @@ function render(d) {
   const s = d.stats;
   const cards = [
     ['Total PnL', fmtPnl(s.total_pnl), pnlClass(s.total_pnl)],
+    ['Total Fees', '$' + s.total_fees.toFixed(2), ''],
     ['Today', fmtPnl(s.day_pnl), pnlClass(s.day_pnl)],
     ['This Month', fmtPnl(s.month_pnl), pnlClass(s.month_pnl)],
     ['Win Rate', s.win_rate + '%', s.win_rate >= 50 ? 'pos' : 'neg'],
@@ -145,7 +146,7 @@ function render(d) {
 
   const tb = document.getElementById('trades-body');
   if (!d.trades.length) {
-    tb.innerHTML = '<tr><td colspan="12" class="empty">No trades yet — bot is scanning…</td></tr>';
+    tb.innerHTML = '<tr><td colspan="13" class="empty">No trades yet — bot is scanning…</td></tr>';
   } else {
     tb.innerHTML = d.trades.map(t => {
       const sideCls = t.side === 'YES' ? 'side-yes' : 'side-no';
@@ -160,6 +161,7 @@ function render(d) {
         <td>${t.shares.toFixed(1)}</td>
         <td><span class="status ${statusCls}">${t.status.replace(/_/g, ' ')}</span></td>
         <td class="${t.pnl_usd === null ? '' : pnlClass(t.pnl_usd)}">${fmtPnl(t.pnl_usd)}</td>
+        <td>${t.fees_paid !== null ? '$' + t.fees_paid.toFixed(2) : '—'}</td>
         <td>${t.edge !== null ? (t.edge * 100).toFixed(0) + '%' : '—'}</td>
         <td>${t.classification || '—'}</td>
         <td>${t.entry_at || ''}</td>

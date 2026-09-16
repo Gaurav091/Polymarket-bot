@@ -36,10 +36,9 @@ CAPITAL_USD = float(os.getenv("CAPITAL_USD", "100"))
 MAX_BET_USD = float(os.getenv("MAX_BET_USD", "10"))
 MIN_BET_USD = float(os.getenv("MIN_BET_USD", "3"))
 EDGE_THRESHOLD = float(os.getenv("EDGE_THRESHOLD", "0.10"))
-# Minimum entry price — <20c entries had 68% SL rate and -$1.96 avg PnL.
-# Sub-30c entries are net-negative; above 30c the system is profitable.
-# This is a hard gate enforced in _maybe_trade() — not just a market filter.
-MIN_ENTRY_PRICE = float(os.getenv("MIN_ENTRY_PRICE", "0.30"))
+# Minimum entry price — 327-trade analysis: entry >= $0.35 is net +$35 (with fees),
+# entry >= $0.40 is clearly profitable. Sub-$0.20 entries hemorrhaged -$247.
+MIN_ENTRY_PRICE = float(os.getenv("MIN_ENTRY_PRICE", "0.35"))
 # Per-market loss circuit breaker: after N losses on one market, block it forever
 # Trip after 2 losses — the ICE-loop bled 27x but that was before the breaker.
 # 1 is too aggressive (blocks 61 markets with a single historical loss); 2
@@ -61,15 +60,15 @@ MIN_VOLUME_USD = float(os.getenv("MIN_VOLUME_USD", "1000"))
 MAX_VOLUME_USD = float(os.getenv("MAX_VOLUME_USD", "500000"))
 MATERIALITY_THRESHOLD = float(os.getenv("MATERIALITY_THRESHOLD", "0.65"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
-# Timeout reduced from 20→12 min: timeout trades have 29.5% WR and -$40 PnL.
-# Dead money should be recycled fast — 12 min is enough for a directional move.
-POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "12"))
+# Timeout extended from 12→18 min: 161 timeout trades at 12 min had 94% loss rate.
+# Trades need time to develop — 18 min gives moves room while still capping exposure.
+POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "18"))
 MAX_SPREAD_USD = float(os.getenv("MAX_SPREAD_USD", "0.08"))  # 8¢ max spread
 
 # Quant engine (Python-native, free data — no LLM)
-# Raised from 0.35→0.50: 35% WR at 0.35 threshold is unprofitable.
-# Only fire quant signals when ensemble is genuinely confident.
-QUANT_MIN_STRENGTH = float(os.getenv("QUANT_MIN_STRENGTH", "0.50"))
+# Raised from 0.35→0.50→0.55: 35% WR at 0.35 threshold was unprofitable.
+# 40%+ edge trades averaged -$1.51 — ensemble overconfident on weak signals.
+QUANT_MIN_STRENGTH = float(os.getenv("QUANT_MIN_STRENGTH", "0.55"))
 
 # TimesFM 2.5 (200M, Apache-2.0) — Google time-series foundation model.
 # CPU-only on this machine: ~0.7s/market batched. Disabled by default;

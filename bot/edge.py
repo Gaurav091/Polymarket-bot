@@ -2,6 +2,11 @@
 Edge detection + position sizing (from PolyAgent's edge.py).
 
 V2 logic: classification direction + materiality → edge → quarter-Kelly sizing.
+
+FEE-AWARE (2026-09): Edge must exceed the expected fee rate after the trade
+round-trip. Taker fees peak at ~4-7% of notional at p=0.50. By using maker
+orders (limit), fees drop to $0 — but the edge floor still protects against
+fallback taker fills.
 """
 from __future__ import annotations
 
@@ -12,6 +17,13 @@ from .calibration import calibrated_probability
 from .classifier import Classification
 from .markets import Market
 from .news import NewsEvent
+
+# Minimum edge after fees — ensures every trade has positive expected value
+# even if filled as taker. Polymarket max taker fee rate is 0.07 (crypto),
+# peak fee per share at p=0.50 is feeRate * 0.25 ≈ 1.75% per side.
+# Round-trip (entry + exit) fee ≈ 3.5%. With edge floor of 0.08, the
+# expected profit after fees is edge - round_trip_fee ≈ 4.5%.
+MIN_EDGE_AFTER_FEES = 0.08
 
 
 @dataclass
@@ -90,6 +102,11 @@ def detect_edge(
         edge *= 0.60  # cheap-market structural disadvantage discount
 
     if edge < edge_thresh:
+        return None
+
+    # Fee-aware guard: even with maker orders, enforce minimum edge floor
+    # to protect against fallback taker fills
+    if edge < MIN_EDGE_AFTER_FEES:
         return None
 
     return Signal(
