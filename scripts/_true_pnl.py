@@ -30,13 +30,13 @@ print(f"Phantom PnL removed:       ${total_db - total_fixed:+.2f}")
 # Overall PnL
 all_rows = conn.execute("SELECT SUM(pnl_usd) as total FROM trades WHERE pnl_usd IS NOT NULL").fetchone()
 real_total = all_rows["total"] - total_db + total_fixed
-print(f"\n=== OVERALL PnL ===")
+print("\n=== OVERALL PnL ===")
 print(f"Current DB total: ${all_rows['total']:+.2f}")
 print(f"After fix:        ${real_total:+.2f}")
 print(f"Difference:       ${all_rows['total'] - real_total:+.2f}")
 
 # Breakdown by exit_reason
-print(f"\n=== PnL BY EXIT REASON ===")
+print("\n=== PnL BY EXIT REASON ===")
 reasons = conn.execute(
     "SELECT exit_reason, COUNT(*) as n, SUM(pnl_usd) as total "
     "FROM trades WHERE pnl_usd IS NOT NULL GROUP BY exit_reason"
