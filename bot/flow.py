@@ -158,7 +158,14 @@ def compute_flow_signal(market: Market) -> FlowSignal:
     # More trades = more reliable signal
     # Tighter spread = more liquid = more reliable
     trade_conf = min(1.0, trade_count / 20.0)
-    spread_conf = 1.0 if spread and spread < 0.05 else 0.5 if spread and spread < 0.10 else 0.2
+    if spread is None:
+        spread_conf = 0.2
+    elif spread < 0.05:
+        spread_conf = 1.0
+    elif spread < 0.10:
+        spread_conf = 0.5
+    else:
+        spread_conf = 0.2
     confidence = trade_conf * spread_conf
 
     # Whale signal gets extra weight (smart money)

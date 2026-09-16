@@ -26,7 +26,12 @@ for m in markets:
         edge = r["edge"] or 0
         hm = r["holding_minutes"] or 0
         q = (r["market_question"] or "")[:50]
-        tag = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "BE"
+        if pnl > 0:
+            tag = "WIN"
+        elif pnl < 0:
+            tag = "LOSS"
+        else:
+            tag = "BE"
         print(f"  {tag:4} | {ep:.3f} -> {xp:.3f} | PnL: ${pnl:+.2f} | Bet: ${amt:.2f} | Edge: {edge:.0%} | Hold: {hm:.0f}m | {er}")
     print(f"  TOTAL: ${total_pnl:+.2f}")
     print()

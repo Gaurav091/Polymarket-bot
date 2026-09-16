@@ -29,7 +29,12 @@ for i, r in enumerate(rows):
     amt = r["amount_usd"] or 0
     q = (r["market_question"] or "")[:60]
 
-    tag = "WIN " if pnl > 0 else "LOSS" if pnl < 0 else "BE  "
+    if pnl > 0:
+        tag = "WIN "
+    elif pnl < 0:
+        tag = "LOSS"
+    else:
+        tag = "BE  "
     print(f"\n#{i+1:2d} [{tag}] ${pnl:+.2f} | {er}")
     print(f"     Market: {q}")
     print(f"     Side: {r['side']} | Source: {src} | Class: {cls}")
