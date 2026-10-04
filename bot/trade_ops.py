@@ -38,7 +38,7 @@ DEAD_MARKET_FAILS = 20
 BLOCKED_HOURS_UTC: frozenset[int] = frozenset()
 
 # Max dollar stop loss per trade (prevents catastrophic losses on low-price entries)
-MAX_STOP_LOSS_USD = 3.0
+MAX_STOP_LOSS_USD = getattr(config, "MAX_STOP_LOSS_USD", 2.5)
 
 
 def _parse_dt(val) -> datetime:

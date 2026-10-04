@@ -148,8 +148,8 @@ def log_trade_close(
     # Gross PnL: bought shares at entry, now worth exit_held_price each
     gross_pnl = (exit_held_price - entry) * shares
 
-    # Polymarket taker fee: fee = shares * feeRate * p * (1-p)
-    # Applied on both entry and exit (market orders = taker)
+    # Polymarket fee calculation: fee = shares * feeRate * p * (1-p)
+    # Applied on both entry and exit (market orders = taker).
     fr = config.POLY_FEE_RATE
     entry_fee = shares * fr * entry * (1 - entry)
     # A dead_market close never places a real sell order (book is empty),

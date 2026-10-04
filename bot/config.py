@@ -60,9 +60,11 @@ MIN_VOLUME_USD = float(os.getenv("MIN_VOLUME_USD", "1000"))
 MAX_VOLUME_USD = float(os.getenv("MAX_VOLUME_USD", "500000"))
 MATERIALITY_THRESHOLD = float(os.getenv("MATERIALITY_THRESHOLD", "0.70"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
-# Timeout reduced from 15→12 min: timeout trades lose -$0.95 avg with 0% win rate.
-# Faster exits recycle capital into new opportunities.
-POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "12"))
+# Extended timeout: prediction markets need 20-30 min for true price discovery.
+# Dumping at 12 min forced premature exits on flat positions and burned spread/fees.
+POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "25"))
+MAX_STOP_LOSS_USD = float(os.getenv("MAX_STOP_LOSS_USD", "2.5"))
+MAKER_ORDERS = os.getenv("MAKER_ORDERS", "true").lower() == "true"
 MAX_SPREAD_USD = float(os.getenv("MAX_SPREAD_USD", "0.08"))  # 8¢ max spread
 # Minimum hours until market expiration — avoid markets ending too soon
 # (sports markets, events ending today). Default 1 hour = 60 minutes.
