@@ -115,9 +115,11 @@ def log_trade_open(
     return trade_id if trade_id is not None else 0
 
 
-def _calculate_close_fee(status: str, entry: float, exit_held_price: float, shares: float) -> float:
+def _calculate_close_fee(
+    status: str, entry: float, exit_held_price: float, shares: float, is_maker: bool | None = None
+) -> float:
     """Calculate Polymarket fee for trade close (0.0 for maker orders)."""
-    if config.MAKER_ORDERS:
+    if is_maker is True or (is_maker is None and config.MAKER_ORDERS):
         return 0.0
     fr = config.POLY_FEE_RATE
     entry_fee = shares * fr * entry * (1.0 - entry)
@@ -154,6 +156,7 @@ def log_trade_close(
     entry_row: sqlite3.Row | None = None,
     tp_move: float = 0.0,
     sl_move: float = 0.0,
+    is_maker: bool | None = None,
 ) -> float:
     """Close a trade, compute PnL. Returns realized PnL in USD.
 
@@ -175,7 +178,7 @@ def log_trade_close(
     exit_held_price = exit_yes_price if row["side"] == "YES" else 1.0 - exit_yes_price
     gross_pnl = (exit_held_price - entry) * shares
 
-    total_fee = _calculate_close_fee(status, entry, exit_held_price, shares)
+    total_fee = _calculate_close_fee(status, entry, exit_held_price, shares, is_maker=is_maker)
     pnl = gross_pnl - total_fee
 
     holding_minutes, tp_hit, sl_hit = None, 0, 0

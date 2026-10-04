@@ -164,7 +164,7 @@ def _execute_live(signal: Signal, price: float, shares: float) -> dict:
             filled = _poll_order_fill(client, order_id, _LIMIT_ORDER_TIMEOUT_S)
             if filled:
                 log.info("[executor] limit BUY filled @ %.3f (maker, $0 fee)", limit_price)
-                return {"status": "executed", "order_id": order_id}
+                return {"status": "executed", "order_id": order_id, "is_maker": True}
 
             # Cancel unfilled limit and fall through to market order
             try:
@@ -187,7 +187,7 @@ def _execute_live(signal: Signal, price: float, shares: float) -> dict:
         resp = client.post_order(signed, OrderType.FAK)  # type: ignore[arg-type]
         order_id = resp.get("orderID", resp.get("id", "unknown")) if isinstance(resp, dict) else str(resp)
         log.info("[executor] market BUY fallback (taker — fee applies)")
-        return {"status": "executed", "order_id": order_id}
+        return {"status": "executed", "order_id": order_id, "is_maker": False}
 
     except ImportError:
         return {"status": "error_no_clob_client"}
@@ -230,7 +230,7 @@ def _close_live(token_id: str, shares: float, ref_price: float) -> dict:
             filled = _poll_order_fill(client, order_id, _LIMIT_ORDER_TIMEOUT_S)
             if filled:
                 log.info("[executor] limit SELL filled @ %.3f (maker, $0 fee)", limit_price)
-                return {"status": "executed", "order_id": order_id}
+                return {"status": "executed", "order_id": order_id, "is_maker": True}
 
             try:
                 client.cancel(order_id)
@@ -251,7 +251,7 @@ def _close_live(token_id: str, shares: float, ref_price: float) -> dict:
         resp = client.post_order(signed, OrderType.FAK)  # type: ignore[arg-type]
         order_id = resp.get("orderID", resp.get("id", "unknown")) if isinstance(resp, dict) else str(resp)
         log.info("[executor] market SELL fallback (taker — fee applies)")
-        return {"status": "executed", "order_id": order_id}
+        return {"status": "executed", "order_id": order_id, "is_maker": False}
 
     except ImportError:
         return {"status": "error_no_clob_client"}
@@ -262,7 +262,8 @@ def _close_live(token_id: str, shares: float, ref_price: float) -> dict:
 
 def close_position(trade_id: int, exit_yes_price: float, status: str = "closed",
                    token_id: str | None = None, shares: float | None = None,
-                   entry_row=None, tp_move: float = 0.0, sl_move: float = 0.0) -> float:
+                   entry_row=None, tp_move: float = 0.0, sl_move: float = 0.0,
+                   is_maker: bool | None = None) -> float:
     """Close a position at the given YES price. Returns realized PnL.
 
     In live mode, first sells the real shares on CLOB (paper mode skips this).
@@ -275,7 +276,9 @@ def close_position(trade_id: int, exit_yes_price: float, status: str = "closed",
         result = _close_live(token_id, shares, exit_yes_price)
         if result["status"] != "executed":
             log.warning(f"[executor] live close failed ({result['status']}) — journaling anyway")
+        is_maker = result.get("is_maker", False)
 
     pnl = journal.log_trade_close(trade_id, exit_yes_price, status,
-                                 entry_row=entry_row, tp_move=tp_move, sl_move=sl_move)
+                                 entry_row=entry_row, tp_move=tp_move, sl_move=sl_move,
+                                 is_maker=is_maker)
     return pnl
