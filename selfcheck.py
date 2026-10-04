@@ -18,7 +18,7 @@ config.SURVIVAL_ENABLED = True
 config.MAKER_ORDERS = False
 
 # Use a throwaway DB — never pollute the production journal
-config.DB_PATH = str(Path(__file__).parent / "data" / "selfcheck_test.db")
+config.DB_PATH = Path(__file__).parent / "data" / "selfcheck_test.db"
 
 from bot.survival import SurvivalMonitor, VitalState  # noqa: E402
 
@@ -155,8 +155,8 @@ config.SURVIVAL_MIN_PROFIT_USD = 0.01  # restore
 print("PASS: min-profit threshold gates survival clock")
 
 # --- Test 14: py-clob-client installed + API surface ---
-from py_clob_client.client import ClobClient  # noqa: E402
-from py_clob_client.clob_types import MarketOrderArgs, OrderType  # noqa: E402
+from py_clob_client.client import ClobClient  # noqa: E402  # type: ignore
+from py_clob_client.clob_types import MarketOrderArgs, OrderType  # noqa: E402  # type: ignore
 assert hasattr(ClobClient, "create_market_order")
 assert hasattr(ClobClient, "get_tick_size")
 assert OrderType.FAK is not None
