@@ -4,8 +4,10 @@
         ".venv/**",
         "**/.env"
     ],
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python.analysis.diagnosticMode": "openFilesOnly",
     "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "none",
         "reportInsecureProtocol": "none",
         "reportFloatEquality": "none",
         "reportCognitiveComplexity": "none"

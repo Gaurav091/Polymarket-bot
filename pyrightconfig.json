@@ -2,6 +2,7 @@
   "venvPath": ".",
   "venv": ".venv",
   "exclude": ["_reference/**", ".venv/**", "**/.env", "**/.env/**"],
+  "reportMissingImports": "none",
   "reportInsecureProtocol": false,
   "typeCheckingFeatures": {
     "reportFloatEquality": false

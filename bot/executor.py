@@ -49,7 +49,7 @@ def _round_to_tick(price: float, tick: float) -> float:
 
 def _make_client():
     """Build an authenticated ClobClient. Returns None if not configured."""
-    from py_clob_client.client import ClobClient
+    from py_clob_client.client import ClobClient  # type: ignore
 
     if not config.POLYMARKET_PRIVATE_KEY:
         log.error("[executor] POLYMARKET_PRIVATE_KEY not set — cannot trade live")
@@ -126,7 +126,7 @@ def _execute_live(signal: Signal, price: float, shares: float) -> dict:
     If unfilled after _LIMIT_ORDER_TIMEOUT_S, cancel and market-fill.
     """
     try:
-        from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
+        from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType  # type: ignore
 
         client = _make_client()
         if client is None:
@@ -199,7 +199,7 @@ def _execute_live(signal: Signal, price: float, shares: float) -> dict:
 def _close_live(token_id: str, shares: float, ref_price: float) -> dict:
     """Sell held shares — GTC limit SELL (maker) with FAK fallback."""
     try:
-        from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
+        from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType  # type: ignore
 
         client = _make_client()
         if client is None:
