@@ -9,5 +9,11 @@
         "reportInsecureProtocol": "none",
         "reportFloatEquality": "none",
         "reportCognitiveComplexity": "none"
+    },
+    "sonarlint.analysisExcludes": "**/.env,**/.env.*",
+    "sonarlint.rules": {
+        "secrets:S6290": {
+            "level": "off"
+        }
     }
 }

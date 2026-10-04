@@ -10,6 +10,7 @@ fallback taker fills.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from . import config
@@ -17,6 +18,8 @@ from .calibration import calibrated_probability
 from .classifier import Classification
 from .markets import Market
 from .news import NewsEvent
+
+log = logging.getLogger(__name__)
 
 # Minimum edge after fees — ensures every trade has positive expected value
 # even if filled as taker. Polymarket max taker fee rate is 0.07 (crypto),
@@ -141,10 +144,15 @@ def _compute_side_and_edge(direction: str, materiality: float, market_price: flo
     """
     # BLOCK: ALL bearish signals — 8% win rate historically
     if direction == "bearish":
+        log.debug(f"[edge] bearish signal blocked (historical 8% WR) — price={market_price:.3f} src={signal_source}")
         return None, 0.0
 
     if direction == "bullish":
-        if market_price > 0.85:
+        # Tightened from 0.85 → 0.80: near-certain markets have tiny room to move
+        if market_price > 0.80:
+            log.debug(f"[edge] bullish blocked: market_price={market_price:.3f} > 0.80 ceiling")
             return None, 0.0
         return "YES", materiality * (1.0 - market_price)
+    # NOTE: neutral direction is already blocked upstream (detect_edge returns None)
+    # This path (non-bearish, non-bullish) returns NO side with penalty applied upstream
     return "NO", materiality * market_price

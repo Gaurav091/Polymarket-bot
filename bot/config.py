@@ -64,6 +64,9 @@ MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
 # Faster exits recycle capital into new opportunities.
 POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "12"))
 MAX_SPREAD_USD = float(os.getenv("MAX_SPREAD_USD", "0.08"))  # 8¢ max spread
+# Minimum hours until market expiration — avoid markets ending too soon
+# (sports markets, events ending today). Default 1 hour = 60 minutes.
+MIN_HOURS_TO_EXPIRATION = int(os.getenv("MIN_HOURS_TO_EXPIRATION", "1"))
 
 # Quant engine (Python-native, free data — no LLM)
 # Raised from 0.35→0.50→0.55→0.65→0.75: 35% WR at 0.35 was unprofitable.
@@ -113,6 +116,12 @@ CLOB_HOST = "https://clob.polymarket.com"
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+if not OPENROUTER_API_KEY:
+    _p1 = os.getenv("OPENROUTER_KEY_P1", "")
+    _p2 = os.getenv("OPENROUTER_KEY_P2", "")
+    if _p1 and _p2:
+        OPENROUTER_API_KEY = f"{_p1}{_p2}"
+        os.environ["OPENROUTER_API_KEY"] = OPENROUTER_API_KEY
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")

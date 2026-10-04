@@ -175,6 +175,12 @@ def fetch_active_markets(limit: int = 100, max_pages: int = 5) -> list[Market]:
 
 def filter_niche(markets: list[Market]) -> list[Market]:
     """PolyAgent's edge: only trade niche markets where the crowd is slow."""
+    from datetime import datetime, timezone
+    import dateutil.parser
+    now = datetime.now(timezone.utc)
+    min_expiry = datetime.now(timezone.utc)
+    # Filter out markets ending too soon (e.g., sports games ending today)
+    min_hours = config.MIN_HOURS_TO_EXPIRATION
     return [
         m for m in markets
         if config.MIN_VOLUME_USD <= m.volume <= config.MAX_VOLUME_USD
@@ -182,6 +188,9 @@ def filter_niche(markets: list[Market]) -> list[Market]:
         # 940% WR, -$104) while 214-354c nets +$14 and >804c nets +$364.
         # Configurable via MIN_ENTRY_PRICE; tuned to sit above the lottery zone.
         and config.MIN_ENTRY_PRICE < m.yes_price < 0.931
+        # Minimum time-to-expiration: avoid markets resolving imminently
+        and (not m.end_date or
+             (dateutil.parser.parse(m.end_date) - now).total_seconds() / 3600 >= min_hours)
     ]
 
 

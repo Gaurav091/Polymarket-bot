@@ -104,15 +104,66 @@ def _keyword_classify(headline: str) -> Classification:
     return Classification(direction, materiality, f"lexicon net={net}", 0, "keyword-lexicon")
 
 
+def _safe_load_dict(candidate: str) -> dict | None:
+    """Safely parse a JSON string into a dictionary if valid."""
+    try:
+        val = json.loads(candidate)
+        return val if isinstance(val, dict) else None
+    except Exception:
+        return None
+
+
+def _extract_from_code_blocks(text: str) -> dict | None:
+    """Parse JSON from markdown ``` code blocks."""
+    if "```" not in text:
+        return None
+    for part in text.split("```"):
+        trimmed = part.strip()
+        if trimmed.startswith("json"):
+            trimmed = trimmed[4:].strip()
+        parsed = _safe_load_dict(trimmed)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _find_balanced_json_chunks(text: str) -> list[str]:
+    """Collect balanced brace substring candidates from text."""
+    chunks: list[str] = []
+    depth = 0
+    start = -1
+    for idx, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start != -1:
+                chunks.append(text[start : idx + 1])
+    return chunks
+
+
+def _extract_from_braces(text: str) -> dict | None:
+    """Try parsing outer braces or balanced JSON object chunks."""
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        parsed = _safe_load_dict(text[start : end + 1])
+        if parsed is not None:
+            return parsed
+    for chunk in _find_balanced_json_chunks(text):
+        parsed = _safe_load_dict(chunk)
+        if parsed and "direction" in parsed:
+            return parsed
+    return None
+
+
 def _extract_json(text: str) -> dict:
-    if "```" in text:
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        text = match.group(0)
+    """Extract JSON object from LLM response text."""
+    extracted = _extract_from_code_blocks(text) or _extract_from_braces(text)
+    if extracted is not None:
+        return extracted
     return json.loads(text)
 
 
@@ -166,8 +217,12 @@ def classify(headline: str, market: Market, source: str = "unknown") -> Classifi
 
         response = completion(
             model=config.CLASSIFICATION_MODEL,
-            max_tokens=2000,  # thinking models burn budget on reasoning — 200 truncates JSON
-            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,  # ensure room for JSON even if model includes thinking tokens
+            temperature=0.0,
+            messages=[
+                {"role": "system", "content": "You are a prediction market news classifier. Output ONLY valid JSON, nothing else."},
+                {"role": "user", "content": prompt}
+            ],
         )
         text = _response_text(response)
         if not text:

@@ -192,11 +192,9 @@ def _close(bot, trade_id: int, exit_yes_price: float, reason: str, row=None,
         pass
 
 
-def _check_trade_gates(bot, signal, open_ids: set) -> str | None:
-    """Return a rejection reason if any gate blocks the trade, else None."""
-    # Check entry price on the held side (YES price for YES, 1-YES for NO)
+def _check_policy_gates(bot, signal, open_ids: set) -> str | None:
+    """Check entry price, timing, and risk management policy gates."""
     entry_price = signal.market_price if signal.side == "YES" else 1.0 - signal.market_price
-    # Round to 2 decimals to avoid floating point precision issues (e.g., 1-0.55=0.449999)
     entry_price = round(entry_price, 2)
     if entry_price < config.MIN_ENTRY_PRICE:
         return f"entry={entry_price:.2f} (min={config.MIN_ENTRY_PRICE})"
@@ -217,33 +215,59 @@ def _check_trade_gates(bot, signal, open_ids: set) -> str | None:
         return f"{len(open_ids)} open >= max {config.MAX_OPEN_POSITIONS}"
     if bot.risk.state.halted:
         return f"risk-halted: {bot.risk.state.halt_reason}"
-    # Reject markets with no live book — they can never be priced, so the
-    # position is guaranteed to exit via dead_market (fee-only loss).
-    token_id = signal.market.token_id(signal.side)
-    if token_id is not None:
-        from .spread import fetch_spread
-        if fetch_spread(token_id) is None:
-            return "no-book"
-        # Reject markets with thin order books (< 200 shares total depth).
-        # Thin books = high slippage + dead-market risk.
-        # Raised from 100 to 200: historical dead-market losses at <200 depth
-        from .quant_signals import fetch_order_book
-        book = fetch_order_book(token_id)
-        if book:
-            bids = book.get("bids", [])
-            asks = book.get("asks", [])
-            total_depth = sum(float(b.get("size", 0)) for b in bids + asks)
-            if total_depth < 200:
-                return f"thin-book ({total_depth:.0f} shares)"
-            # Also require reasonable spread (< 0.08)
-            if bids and asks:
-                best_bid = max(float(b["price"]) for b in bids)
-                best_ask = min(float(a["price"]) for a in asks)
-                if best_ask - best_bid > 0.08:
-                    return f"wide-spread ({best_ask - best_bid:.3f})"
-        else:
-            return "no-book"
     return None
+
+
+def _check_watcher_gate(bot, signal) -> str | None:
+    """Block trades where the real-time watcher has no data (dead/illiquid book)."""
+    token_id_check = signal.market.token_id(signal.side)
+    if token_id_check is None:
+        return None
+    watcher_data = getattr(bot, "watcher", None)
+    if watcher_data is None:
+        return None
+    latest = watcher_data.get_latest(token_id_check)
+    if latest is not None:
+        return None
+    # Also check the YES-side token if checking NO token
+    yes_token = signal.market.token_id("YES")
+    if yes_token and watcher_data.get_latest(yes_token) is not None:
+        return None
+    return "watcher-no-data (likely dead book)"
+
+
+def _check_liquidity_gate(signal) -> str | None:
+    """Check spread and order book depth to prevent high slippage."""
+    token_id = signal.market.token_id(signal.side)
+    if token_id is None:
+        return None
+    from .spread import fetch_spread
+    if fetch_spread(token_id) is None:
+        return "no-book"
+    from .quant_signals import fetch_order_book
+    book = fetch_order_book(token_id)
+    if not book:
+        return "no-book"
+    bids = book.get("bids", [])
+    asks = book.get("asks", [])
+    total_depth = sum(float(b.get("size", 0)) for b in bids + asks)
+    if total_depth < 500:
+        return f"thin-book ({total_depth:.0f} shares)"
+    if bids and asks:
+        best_bid = max(float(b["price"]) for b in bids)
+        best_ask = min(float(a["price"]) for a in asks)
+        if best_ask - best_bid > 0.08:
+            return f"wide-spread ({best_ask - best_bid:.3f})"
+    return None
+
+
+def _check_trade_gates(bot, signal, open_ids: set) -> str | None:
+    """Return a rejection reason if any gate blocks the trade, else None."""
+    return (
+        _check_policy_gates(bot, signal, open_ids)
+        or _check_watcher_gate(bot, signal)
+        or _check_liquidity_gate(signal)
+    )
 
 
 def _maybe_trade(bot, signal):
