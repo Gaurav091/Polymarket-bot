@@ -32,10 +32,13 @@ log = logging.getLogger(__name__)
 TAKE_PROFIT_PCT = 0.15
 STOP_LOSS_PCT = 0.18
 REENTRY_COOLDOWN_MIN = 8
-POSITION_MAX_AGE = config.POSITION_TIMEOUT_MINUTES  # 18 min — let trades develop
+POSITION_MAX_AGE = config.POSITION_TIMEOUT_MINUTES  # 12 min — faster capital recycling
 # Dead-market threshold doubled from 10→20 to avoid false exits on API flaps
 DEAD_MARKET_FAILS = 20
 BLOCKED_HOURS_UTC: frozenset[int] = frozenset()
+
+# Max dollar stop loss per trade (prevents catastrophic losses on low-price entries)
+MAX_STOP_LOSS_USD = 3.0
 
 
 def _parse_dt(val) -> datetime:
@@ -87,7 +90,9 @@ def _position_exit(bot, row, prices, entry, side, age_min, tp_move, sl_move):
         return "timeout", 0.0, 0.0
     if move >= tp_move:
         return "take_profit", tp_move, sl_move
-    if move <= -sl_move:
+    # Minimum 2-minute hold before stop-loss — prevents 12-second catastrophic
+    # stops caused by taker fills at worse prices than expected.
+    if move <= -sl_move and age_min >= 2.0:
         return "stop_loss", tp_move, sl_move
     return None
 
@@ -118,13 +123,26 @@ def monitor_positions(bot):
             _handle_dead_market(bot, row)
             continue
         yes_now = prices[0]
-        bot.regimes.update_market(row["market_id"], yes_now,
-                                  resolved=is_resolved(yes_now, prices[1]))
+        bot.regimes.observe(row["market_id"], yes_now,
+                      resolved=is_resolved(yes_now, prices[1]))
         entered = _parse_dt(row["entry_at"])
         age_min = (datetime.now(timezone.utc) - entered).total_seconds() / 60
-        tp_move = min(0.08, max(0.03, entry * TAKE_PROFIT_PCT))
-        sl_floor = max(0.02, entry * 0.10)
-        sl_move = min(0.06, max(sl_floor, entry * STOP_LOSS_PCT))
+        # TP/SL scaled by entry price — wider for mid-range, tighter for extremes
+        if entry >= 0.50:
+            tp_move = min(0.10, max(0.05, entry * 0.15))  # 5-10¢ TP
+            sl_move = min(0.06, max(0.03, entry * 0.12))   # 3-6¢ SL
+        elif entry >= 0.35:
+            tp_move = min(0.08, max(0.04, entry * 0.12))   # 4-8¢ TP
+            sl_move = min(0.05, max(0.02, entry * 0.10))   # 2-5¢ SL
+        else:
+            tp_move = min(0.05, max(0.03, entry * 0.15))   # 3-5¢ TP
+            sl_move = min(0.04, max(0.02, entry * 0.12))   # 2-4¢ SL
+
+        # Cap SL move to prevent catastrophic dollar losses on low-price entries
+        # MAX_STOP_LOSS_USD / shares = max price move allowed
+        max_sl_move = MAX_STOP_LOSS_USD / row["shares"] if row["shares"] > 0 else sl_move
+        sl_move = min(sl_move, max_sl_move)
+
         exit_ = _position_exit(bot, row, prices, entry, side, age_min, tp_move, sl_move)
         if exit_:
             reason, tp_rec, sl_rec = exit_
@@ -169,18 +187,19 @@ def _close(bot, trade_id: int, exit_yes_price: float, reason: str, row=None,
         log.info(f"[close] {reason} ${pnl:.2f}")
         _track_loss(bot, row)
     try:
-        bot.learner.update_on_close(pnl, reason)
+        bot.learner.on_trade_closed(row.get("signal_source") if row else None)
     except Exception:
         pass
 
 
 def _check_trade_gates(bot, signal, open_ids: set) -> str | None:
     """Return a rejection reason if any gate blocks the trade, else None."""
-    if signal.market_price < config.MIN_ENTRY_PRICE:
-        entry = (signal.market_price if signal.side == "YES"
-                 else 1.0 - signal.market_price)
-        if entry < config.MIN_ENTRY_PRICE:
-            return f"entry={entry:.2f} (min={config.MIN_ENTRY_PRICE})"
+    # Check entry price on the held side (YES price for YES, 1-YES for NO)
+    entry_price = signal.market_price if signal.side == "YES" else 1.0 - signal.market_price
+    # Round to 2 decimals to avoid floating point precision issues (e.g., 1-0.55=0.449999)
+    entry_price = round(entry_price, 2)
+    if entry_price < config.MIN_ENTRY_PRICE:
+        return f"entry={entry_price:.2f} (min={config.MIN_ENTRY_PRICE})"
     utc_hour = datetime.now(timezone.utc).hour
     if utc_hour in BLOCKED_HOURS_UTC:
         return f"blocked hour {utc_hour}"
@@ -198,6 +217,32 @@ def _check_trade_gates(bot, signal, open_ids: set) -> str | None:
         return f"{len(open_ids)} open >= max {config.MAX_OPEN_POSITIONS}"
     if bot.risk.state.halted:
         return f"risk-halted: {bot.risk.state.halt_reason}"
+    # Reject markets with no live book — they can never be priced, so the
+    # position is guaranteed to exit via dead_market (fee-only loss).
+    token_id = signal.market.token_id(signal.side)
+    if token_id is not None:
+        from .spread import fetch_spread
+        if fetch_spread(token_id) is None:
+            return "no-book"
+        # Reject markets with thin order books (< 200 shares total depth).
+        # Thin books = high slippage + dead-market risk.
+        # Raised from 100 to 200: historical dead-market losses at <200 depth
+        from .quant_signals import fetch_order_book
+        book = fetch_order_book(token_id)
+        if book:
+            bids = book.get("bids", [])
+            asks = book.get("asks", [])
+            total_depth = sum(float(b.get("size", 0)) for b in bids + asks)
+            if total_depth < 200:
+                return f"thin-book ({total_depth:.0f} shares)"
+            # Also require reasonable spread (< 0.08)
+            if bids and asks:
+                best_bid = max(float(b["price"]) for b in bids)
+                best_ask = min(float(a["price"]) for a in asks)
+                if best_ask - best_bid > 0.08:
+                    return f"wide-spread ({best_ask - best_bid:.3f})"
+        else:
+            return "no-book"
     return None
 
 

@@ -171,6 +171,14 @@ def compute_quant_signal(market: Market, timesfm_score: float | None = None) -> 
     else:
         direction = "bullish" if combined > 0 else "bearish"
 
+    # Signal agreement gate: require at least 2 signals to agree on direction.
+    # Prevents single dominant signal (e.g., flow=-1.0) from firing trades alone.
+    if direction != "neutral":
+        agreeing = sum(1 for v, _ in parts if (v > 0.01) == (combined > 0))
+        if agreeing < 2:
+            direction = "neutral"
+            strength = 0.0
+
     return QuantSignal(
         direction=direction,
         strength=round(strength, 3),

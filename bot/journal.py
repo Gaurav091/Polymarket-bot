@@ -152,7 +152,13 @@ def log_trade_close(
     # Applied on both entry and exit (market orders = taker)
     fr = config.POLY_FEE_RATE
     entry_fee = shares * fr * entry * (1 - entry)
-    exit_fee = shares * fr * exit_held_price * (1 - exit_held_price)
+    # A dead_market close never places a real sell order (book is empty),
+    # so no exit fee is actually paid. Charging it manufactures a guaranteed
+    # loss on every dead-market exit.
+    if status == "dead_market" and abs(exit_held_price - entry) < 1e-9:
+        exit_fee = 0.0
+    else:
+        exit_fee = shares * fr * exit_held_price * (1 - exit_held_price)
     total_fee = entry_fee + exit_fee
     pnl = gross_pnl - total_fee
 

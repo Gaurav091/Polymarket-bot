@@ -29,7 +29,8 @@ from .markets import MIN_ORDER_SIZE_SHARES, MIN_ORDER_VALUE_USDC
 log = logging.getLogger(__name__)
 
 # Limit order timeout: if unfilled after this many seconds, cancel and market-fill
-_LIMIT_ORDER_TIMEOUT_S = 60.0
+# Increased from 60s to 120s: gives maker orders more time to fill, reducing taker fees
+_LIMIT_ORDER_TIMEOUT_S = 120.0
 
 
 def _shares_for(bet_amount: float, price: float) -> float:
@@ -141,8 +142,12 @@ def _execute_live(signal: Signal, price: float, shares: float) -> dict:
         try:
             book = client.get_order_book(token_id)
             best_bid = float(book.bids[0].price) if book.bids else price - 0.02
-            # Place at best_bid + 1 tick to be top of book (maker)
-            limit_price = _round_to_tick(min(best_bid + tick, price + 0.02, 0.99), tick)
+            best_ask = float(book.asks[0].price) if book.asks else price + 0.02
+            mid = (best_bid + best_ask) / 2
+
+            # Place at mid - 1 tick (for YES) or mid + 1 tick (for NO) to be competitive maker
+            # This is more aggressive than best_bid+1tick but still a maker order
+            limit_price = _round_to_tick(min(mid + tick, price + 0.01, 0.99), tick)
             size = max(shares, MIN_ORDER_SIZE_SHARES)
 
             order_args = OrderArgs(
@@ -205,8 +210,12 @@ def _close_live(token_id: str, shares: float, ref_price: float) -> dict:
         # Try limit sell first (maker = zero fees)
         try:
             book = client.get_order_book(token_id)
+            best_bid = float(book.bids[0].price) if book.bids else ref_price - 0.02
             best_ask = float(book.asks[0].price) if book.asks else ref_price + 0.02
-            limit_price = _round_to_tick(max(best_ask - tick, ref_price - 0.02, 0.01), tick)
+            mid = (best_bid + best_ask) / 2
+
+            # Place at mid + 1 tick to be competitive maker
+            limit_price = _round_to_tick(max(mid - tick, ref_price - 0.01, 0.01), tick)
 
             order_args = OrderArgs(
                 token_id=token_id,

@@ -94,6 +94,11 @@ def momentum_signal(token_id: str) -> float:
 
 def mean_reversion_signal(token_id: str, current_price: float) -> float:
     """Fade extremes: price far below its mean → positive (buy YES cheap)."""
+    # Binary markets are bimodal — mean reversion near extremes is wrong.
+    # When price > 0.75 or < 0.25, the market is near resolution and the
+    # current price is likely correct. Don't fade it.
+    if current_price > 0.75 or current_price < 0.25:
+        return 0.0
     history = fetch_price_history(token_id)
     if len(history) < 30:
         return 0.0
@@ -133,6 +138,11 @@ def flow_signal(token_id: str, current_price: float) -> float:
     total = bid_depth + ask_depth
     if total == 0:
         return 0.0
-    return max(-1.0, min(1.0, (bid_depth - ask_depth) / total * 2.0))
+    raw_flow = (bid_depth - ask_depth) / total * 2.0
+    # Dampen near extremes — structural book imbalance is market-making, not directional
+    if current_price > 0.70 or current_price < 0.30:
+        dampening = max(0.2, 1.0 - abs(current_price - 0.5) * 2.0)
+        raw_flow *= dampening
+    return max(-1.0, min(1.0, raw_flow))
 
 

@@ -19,11 +19,16 @@ from .markets import Market
 
 log = logging.getLogger(__name__)
 
-# Circuit breaker: after 3 consecutive LLM failures, stop calling the LLM
-# for the rest of the session and use keyword fallback only.
+# Circuit breaker: after 3 consecutive LLM failures, pause the LLM for a
+# cooldown instead of killing it for the whole session. Free-tier providers
+# (OpenRouter :free models) rate-limit transiently — a permanent disable meant
+# one 429 burst left the bot on keyword-only mode for days, which caps
+# materiality at 0.6 and keeps signals below the trade threshold.
 _LLM_FAIL_COUNT = 0
 _LLM_DISABLED = False
 _LLM_FAIL_LIMIT = 3
+_LLM_COOLDOWN_SECONDS = 300.0
+_LLM_DISABLED_UNTIL = 0.0
 
 CLASSIFICATION_PROMPT = """You are a news classifier for prediction markets.
 
@@ -62,7 +67,7 @@ class Classification:
 # Keyword-based fallback when no LLM is configured — weighted lexicon.
 # Each word carries a sentiment weight; headline score = sum of weights.
 BULLISH_WORDS = {
-    "wins": 2, "won": 2, "beats": 2, "beat": 2, "record": 1, "surge": 2,
+    "wins": 2, "won": 2, "beats": 2, "beat": 2, "record": 1, "surge": 2, "surges": 2,
     "soars": 2, "rally": 1, "breakthrough": 2, "approves": 2, "approved": 2,
     "passes": 2, "passed": 2, "confirms": 1, "confirmed": 1, "announces": 1,
     "launches": 1, "signs": 1, "achieves": 2, "hits": 1, "deal": 1,
@@ -90,8 +95,12 @@ def _keyword_classify(headline: str) -> Classification:
     if net == 0:
         return Classification("neutral", 0.0, "no keyword match", 0, "keyword-lexicon")
     direction = "bullish" if net > 0 else "bearish"
-    # Materiality: |net| of 3+ → 0.6+ (tradeable); cap at 1.0
-    materiality = min(1.0, abs(net) / 5.0)
+    # Materiality: require |net| of 4+ for tradeable signal (was 3+)
+    # This reduces false signals from weak keyword matches.
+    materiality = min(1.0, abs(net) / 7.0)
+    # Keyword-only mode is unreliable — cap materiality at 0.6
+    # to prevent overconfident trades from weak signals.
+    materiality = min(0.6, materiality)
     return Classification(direction, materiality, f"lexicon net={net}", 0, "keyword-lexicon")
 
 
@@ -107,9 +116,31 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
+def _response_text(response) -> str:
+    """Pull text out of a litellm response.
+
+    Thinking models often return `content=None` with everything in
+    `reasoning_content` (or vice versa) once `max_tokens` is hit — calling
+    `.strip()` on None crashed classify() and silently degraded to keywords.
+    """
+    msg = response.choices[0].message
+    for attr in ("content", "reasoning_content"):
+        text = getattr(msg, attr, None)
+        if text and text.strip():
+            return text.strip()
+    return ""
+
+
 def classify(headline: str, market: Market, source: str = "unknown") -> Classification:
     """Classify a news headline against a market question."""
-    global _LLM_DISABLED, _LLM_FAIL_COUNT
+    global _LLM_DISABLED, _LLM_FAIL_COUNT, _LLM_DISABLED_UNTIL
+
+    if _LLM_DISABLED and time.time() < _LLM_DISABLED_UNTIL:
+        return _keyword_classify(headline)
+    if _LLM_DISABLED:  # cooldown elapsed — retry the LLM
+        _LLM_DISABLED = False
+        _LLM_FAIL_COUNT = 0
+        log.info("[classifier] LLM cooldown elapsed — retrying LLM")
 
     has_llm_key = any([
         config.ANTHROPIC_API_KEY,
@@ -119,7 +150,7 @@ def classify(headline: str, market: Market, source: str = "unknown") -> Classifi
         config.XAI_API_KEY,
         config.GROQ_API_KEY,
     ])
-    if not has_llm_key or _LLM_DISABLED:
+    if not has_llm_key:
         return _keyword_classify(headline)
 
     start = time.time()
@@ -138,9 +169,12 @@ def classify(headline: str, market: Market, source: str = "unknown") -> Classifi
             max_tokens=2000,  # thinking models burn budget on reasoning — 200 truncates JSON
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.choices[0].message.content.strip()
+        text = _response_text(response)
+        if not text:
+            raise ValueError("LLM returned empty content and reasoning_content")
         result = _extract_json(text)
         latency = int((time.time() - start) * 1000)
+        _LLM_FAIL_COUNT = 0  # a good call resets the breaker
 
         direction = result.get("direction", "neutral")
         if direction not in ("bullish", "bearish", "neutral"):
@@ -158,9 +192,11 @@ def classify(headline: str, market: Market, source: str = "unknown") -> Classifi
         _LLM_FAIL_COUNT += 1
         if _LLM_FAIL_COUNT >= _LLM_FAIL_LIMIT:
             _LLM_DISABLED = True
+            _LLM_DISABLED_UNTIL = time.time() + _LLM_COOLDOWN_SECONDS
             log.warning(
-                f"[classifier] LLM failed {_LLM_FAIL_COUNT}x — disabling LLM for this "
-                f"session, keyword fallback only ({type(e).__name__})"
+                f"[classifier] LLM failed {_LLM_FAIL_COUNT}x — cooling down for "
+                f"{int(_LLM_COOLDOWN_SECONDS)}s, keyword fallback meanwhile "
+                f"({type(e).__name__})"
             )
         else:
             log.warning(f"[classifier] LLM error: {e} — falling back to keywords")

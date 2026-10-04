@@ -134,6 +134,20 @@ def run_news_scan(bot):
     matched_total = 0
     neutral_count = 0
     edge_reject = 0
+    tfm_reject = 0
+    # One TimesFM forecast per token per scan — re-running the 200M model for
+    # every headline×market pair made this scan take ~160s per cycle.
+    tfm_cache: dict[str, float] = {}
+
+    def _tfm_for(token: str) -> float:
+        if token in tfm_cache:
+            return tfm_cache[token]
+        hist = fetch_price_history(token)
+        score = 0.0
+        if len(hist) >= config.TIMESFM_MIN_HISTORY:
+            score = forecast_batch({token: [p for _, p in hist]}).get(token, 0.0)
+        tfm_cache[token] = score
+        return score
     for event in events:
         matched = match_news_to_markets(event.headline, bot.markets)
         bot.stats["matched"] += len(matched)
@@ -145,6 +159,22 @@ def run_news_scan(bot):
                     neutral_count += 1
                     continue
                 emergency = bot.survival.is_critical()
+                
+                # TimesFM confirmation for news signals (extra quality filter)
+                if config.TIMESFM_ENABLED and config.TIMESFM_CONFIRM_NEWS:
+                    token = market.token_id("YES")
+                    tfm_score = _tfm_for(token) if token else 0.0
+                    # Only veto when TimesFM has a *confident* contrary call.
+                    # A missing/flat forecast scores 0.0, which used to read as
+                    # bearish and silently rejected every bullish news signal.
+                    if abs(tfm_score) >= 0.10:
+                        news_bullish = classification.direction == "bullish"
+                        tfm_bullish = tfm_score > 0
+                        if news_bullish != tfm_bullish:
+                            tfm_reject += 1
+                            log.debug(f"[news] TimesFM disagreement: news={classification.direction} tfm={tfm_score:.3f} — skipping")
+                            continue
+                
                 signal = detect_edge(
                     market, classification, event,
                     emergency_override=emergency,
@@ -162,5 +192,5 @@ def run_news_scan(bot):
     if matched_total > 0:
         log.info(
             f"[news] {len(events)} events → {matched_total} matched "
-            f"({neutral_count} neutral, {edge_reject} edge-reject)"
+            f"({neutral_count} neutral, {edge_reject} edge-reject, {tfm_reject} tfm-reject)"
         )

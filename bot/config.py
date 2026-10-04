@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env", override=True)
 
 # All HTTP calls use verify=False (SSL verification hangs on this machine) —
 # silence the resulting warning spam once, globally.
@@ -38,12 +38,12 @@ MIN_BET_USD = float(os.getenv("MIN_BET_USD", "3"))
 EDGE_THRESHOLD = float(os.getenv("EDGE_THRESHOLD", "0.10"))
 # Minimum entry price — 327-trade analysis: entry >= $0.35 is net +$35 (with fees),
 # entry >= $0.40 is clearly profitable. Sub-$0.20 entries hemorrhaged -$247.
-MIN_ENTRY_PRICE = float(os.getenv("MIN_ENTRY_PRICE", "0.35"))
+MIN_ENTRY_PRICE = float(os.getenv("MIN_ENTRY_PRICE", "0.45"))
 # Per-market loss circuit breaker: after N losses on one market, block it forever
 # Trip after 2 losses — the ICE-loop bled 27x but that was before the breaker.
 # 1 is too aggressive (blocks 61 markets with a single historical loss); 2
 # still catches revenge loops while leaving one-shot losers tradeable.
-MARKET_LOSS_LIMIT = int(os.getenv("MARKET_LOSS_LIMIT", "2"))
+MARKET_LOSS_LIMIT = int(os.getenv("MARKET_LOSS_LIMIT", "1"))
 
 # ============================================================
 # Risk management (4-layer system, ported from Polymarket-bot)
@@ -58,25 +58,29 @@ TOTAL_MAX_LOSS_PCT = float(os.getenv("TOTAL_MAX_LOSS_PCT", "0.40"))      # 40%
 # ============================================================
 MIN_VOLUME_USD = float(os.getenv("MIN_VOLUME_USD", "1000"))
 MAX_VOLUME_USD = float(os.getenv("MAX_VOLUME_USD", "500000"))
-MATERIALITY_THRESHOLD = float(os.getenv("MATERIALITY_THRESHOLD", "0.65"))
+MATERIALITY_THRESHOLD = float(os.getenv("MATERIALITY_THRESHOLD", "0.70"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
-# Timeout extended from 12→18 min: 161 timeout trades at 12 min had 94% loss rate.
-# Trades need time to develop — 18 min gives moves room while still capping exposure.
-POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "18"))
+# Timeout reduced from 15→12 min: timeout trades lose -$0.95 avg with 0% win rate.
+# Faster exits recycle capital into new opportunities.
+POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "12"))
 MAX_SPREAD_USD = float(os.getenv("MAX_SPREAD_USD", "0.08"))  # 8¢ max spread
 
 # Quant engine (Python-native, free data — no LLM)
-# Raised from 0.35→0.50→0.55: 35% WR at 0.35 threshold was unprofitable.
+# Raised from 0.35→0.50→0.55→0.65→0.75: 35% WR at 0.35 was unprofitable.
 # 40%+ edge trades averaged -$1.51 — ensemble overconfident on weak signals.
-QUANT_MIN_STRENGTH = float(os.getenv("QUANT_MIN_STRENGTH", "0.55"))
+# With bearish signals blocked, need higher threshold for remaining bullish signals.
+QUANT_MIN_STRENGTH = float(os.getenv("QUANT_MIN_STRENGTH", "0.75"))
 
 # TimesFM 2.5 (200M, Apache-2.0) — Google time-series foundation model.
 # CPU-only on this machine: ~0.7s/market batched. Disabled by default;
 # set TIMESFM_ENABLED=true in .env to activate.
-TIMESFM_ENABLED = os.getenv("TIMESFM_ENABLED", "false").lower() == "true"
+TIMESFM_ENABLED = os.getenv("TIMESFM_ENABLED", "true").lower() == "true"
 TIMESFM_HORIZON = int(os.getenv("TIMESFM_HORIZON", "12"))        # forecast 12h ahead
 TIMESFM_MIN_HISTORY = int(os.getenv("TIMESFM_MIN_HISTORY", "30"))  # min candles needed
 TIMESFM_DRIFT_SCALE = float(os.getenv("TIMESFM_DRIFT_SCALE", "8.0"))  # drift→score scale
+# Use TimesFM to confirm news signals (requires TimesFM enabled)
+# Adds extra quality filter: news + quant agreement = higher conviction
+TIMESFM_CONFIRM_NEWS = os.getenv("TIMESFM_CONFIRM_NEWS", "true").lower() == "true"
 
 # ============================================================
 # LLM Classifier
@@ -128,12 +132,33 @@ RSS_FEEDS = [
     feed.strip()
     for feed in os.getenv(
         "RSS_FEEDS",
+        # Tech/AI (existing)
         "https://news.google.com/rss/search?q=AI+artificial+intelligence&hl=en-US&gl=US&ceid=US:en,"
         "https://news.google.com/rss/search?q=bitcoin+crypto&hl=en-US&gl=US&ceid=US:en,"
         "https://news.google.com/rss/search?q=federal+reserve+economy&hl=en-US&gl=US&ceid=US:en,"
         "https://feeds.feedburner.com/TechCrunch,"
         "https://feeds.arstechnica.com/arstechnica/technology-lab,"
-        "https://www.theverge.com/rss/index.xml",
+        "https://www.theverge.com/rss/index.xml,"
+        # Politics/Elections (high-impact for Polymarket)
+        "https://news.google.com/rss/search?q=election+campaign&hl=en-US&gl=US&ceid=US:en,"
+        "https://news.google.com/rss/search?q=congress+senate+vote&hl=en-US&gl=US&ceid=US:en,"
+        "https://news.google.com/rss/search?q=supreme+court+ruling&hl=en-US&gl=US&ceid=US:en,"
+        "https://news.google.com/rss/search?q=trump+biden+harris&hl=en-US&gl=US&ceid=US:en,"
+        "https://www.politico.com/rss/politics.xml,"
+        "https://www.axios.com/feed.xml,"
+        # Crypto/DeFi (major Polymarket categories)
+        "https://news.google.com/rss/search?q=ethereum+solana+defi&hl=en-US&gl=US&ceid=US:en,"
+        "https://news.google.com/rss/search?q=bitcoin+etf+sec&hl=en-US&gl=US&ceid=US:en,"
+        "https://www.coindesk.com/arc/outboundfeeds/rss/,"
+        "https://cointelegraph.com/rss,"
+        # Macro/Economy (Fed, inflation, jobs)
+        "https://news.google.com/rss/search?q=federal+reserve+interest+rate&hl=en-US&gl=US&ceid=US:en,"
+        "https://news.google.com/rss/search?q=inflation+cpi+jobs+report&hl=en-US&gl=US&ceid=US:en,"
+        "https://feeds.bloomberg.com/markets/news.rss,"
+        "https://www.reuters.com/markets/rss,"
+        # Sports (Polymarket has sports markets)
+        "https://news.google.com/rss/search?q=nfl+nba+championship&hl=en-US&gl=US&ceid=US:en,"
+        "https://www.espn.com/espn/rss/news,"
     ).split(",")
     if feed.strip()
 ]

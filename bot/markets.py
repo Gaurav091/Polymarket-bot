@@ -110,21 +110,34 @@ def _parse_market(m: dict) -> Market | None:
 
 def _fetch_page(page: int, remaining: int) -> list[dict]:
     """Fetch one page of markets from Gamma API.
-    Retries transient failures (Gamma intermittently 404s/resets under load)."""
+
+    Retries transient failures (Gamma intermittently 404s/resets under load).
+
+    Two API quirks handled here (both broke the pipeline silently):
+    - `order=volume` now returns a dummy volume (9.99975) for nearly every
+      market, so the niche filter rejected ~97% of them. `order=volumeNum`
+      is the working sort key and carries the real cumulative volume.
+    - `volume_num_min`/`volume_num_max` filter server-side, so one small
+      page yields usable niche markets instead of paging through 2100
+      high-volume ones (Gamma 422s past offset 2100 anyway).
+    """
+    params = {
+        "limit": min(100, remaining),
+        "active": "true",
+        "closed": "false",
+        "order": "volumeNum",
+        "ascending": "false",
+        "offset": page * 100,
+        "volume_num_min": config.MIN_VOLUME_USD,
+        "volume_num_max": config.MAX_VOLUME_USD,
+    }
     last_err = None
     for attempt in range(3):
         try:
-            resp = http.get(
-                f"{config.GAMMA_API}/markets",
-                params={
-                    "limit": min(100, remaining),
-                    "active": "true",
-                    "closed": "false",
-                    "order": "volume",
-                    "ascending": "false",
-                    "offset": page * 100,
-                },
-            )
+            resp = http.get(f"{config.GAMMA_API}/markets", params=params)
+            if resp.status_code == 422:
+                # Offset/range limit reached — not a transient error, stop paging.
+                return []
             resp.raise_for_status()
             data = resp.json()
             items = data if isinstance(data, list) else data.get("data", [])
@@ -196,41 +209,42 @@ def get_current_price(condition_id: str) -> tuple[float, float] | None:
 # Batch price fetching (from polymarket-cli clob prices)
 # ============================================================
 
-def fetch_batch_prices(token_ids: list[str]) -> dict[str, tuple[float, float]]:
-    """Fetch prices for multiple tokens in a single CLOB call.
-    
-    The CLOB /prices endpoint supports comma-separated token IDs.
-    Returns {token_id: (yes_price, no_price)}.
-    
-    This is 5-10x faster than fetching one market at a time.
+def fetch_token_price(token_id: str) -> float | None:
+    """Fetch the mid price for a single token from the CLOB /book endpoint.
+
+    /prices returns HTTP 400 (endpoint removed), so /book is the working source.
+    Mid = (best_bid + best_ask) / 2. Returns None on empty/failed book.
     """
-    if not token_ids:
-        return {}
-    # CLOB /prices accepts comma-separated token IDs
-    # Batch in groups of 20 to avoid URL length limits
+    try:
+        resp = http.get(
+            f"{config.CLOB_HOST}/book",
+            params={"token_id": token_id},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        book = resp.json()
+        bids = book.get("bids", [])
+        asks = book.get("asks", [])
+        if not bids or not asks:
+            return None
+        best_bid = max(float(b["price"]) for b in bids)
+        best_ask = min(float(a["price"]) for a in asks)
+        return (best_bid + best_ask) / 2.0
+    except Exception as e:
+        log.debug(f"[markets] book price fetch error: {e}")
+        return None
+
+
+def fetch_batch_prices(token_ids: list[str]) -> dict[str, tuple[float, float]]:
+    """Fetch prices for multiple tokens (one /book call per token).
+
+    Returns {token_id: (yes_price, no_price)}.
+    """
     results: dict[str, tuple[float, float]] = {}
-    batch_size = 20
-    for i in range(0, len(token_ids), batch_size):
-        batch = token_ids[i:i + batch_size]
-        ids_str = ",".join(batch)
-        try:
-            resp = http.get(
-                f"{config.CLOB_HOST}/prices",
-                params={"token_ids": ids_str},
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            # Response format: {"prices": {"token_id": "price_string", ...}}
-            prices_dict = data.get("prices", {})
-            for tid, price_str in prices_dict.items():
-                try:
-                    price = float(price_str)
-                    results[tid] = (price, 1.0 - price)
-                except (ValueError, TypeError):
-                    pass
-        except Exception as e:
-            log.debug(f"[markets] batch price fetch error: {e}")
+    for tid in token_ids:
+        price = fetch_token_price(tid)
+        if price is not None:
+            results[tid] = (price, 1.0 - price)
     return results
 
 

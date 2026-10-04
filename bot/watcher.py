@@ -67,10 +67,20 @@ class MarketPriceWatcher:
     
     def watch_tokens(self, token_ids: list[str]):
         """Add tokens to the watch list."""
-        self._watching.update(token_ids)
+        new = [t for t in token_ids if t and t not in self._watching]
+        self._watching.update(new)
         for tid in token_ids:
-            if tid not in self._trackers:
+            if tid and tid not in self._trackers:
                 self._trackers[tid] = _PriceTracker()
+        # WS subscription is fixed at connect time — force a reconnect so newly
+        # added tokens actually get subscribed instead of waiting for the next
+        # heartbeat timeout (which never fires when the socket is silent).
+        if new and self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
     
     def unwatch_tokens(self, token_ids: list[str]):
         """Remove tokens from the watch list."""
@@ -117,7 +127,13 @@ class MarketPriceWatcher:
                     log.debug(f"[watcher] WS failed: {e}, falling back to polling")
                     self._use_ws = False
             else:
-                _run_polling(self)
+                try:
+                    _run_polling(self)
+                except Exception as e:
+                    log.debug(f"[watcher] polling failed: {e}")
+                    time.sleep(5)
+                else:
+                    time.sleep(1.0)
     
     def _run_ws(self):
         """WebSocket price streaming (delegated to watcher_ws)."""

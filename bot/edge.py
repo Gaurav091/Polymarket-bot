@@ -93,13 +93,20 @@ def detect_edge(
 
     # Calibration-adjusted fair probability (favorite-longshot bias correction)
     market_price = calibrated_probability(market.yes_price)
-    side, edge = _compute_side_and_edge(classification.direction, classification.materiality, market_price)
+    side, edge = _compute_side_and_edge(
+        classification.direction, classification.materiality, market_price, signal_source
+    )
     if side is None:
         return None
 
     entry_price = market_price if side == "YES" else (1.0 - market_price)
     if entry_price < 0.40:
         edge *= 0.60  # cheap-market structural disadvantage discount
+
+    # NO-side sizing penalty: 0% win rate in 20 historical trades.
+    # Reduce bet size by 50% for NO trades until proven profitable.
+    if side == "NO":
+        edge *= 0.50
 
     if edge < edge_thresh:
         return None
@@ -125,13 +132,19 @@ def detect_edge(
     )
 
 
-def _compute_side_and_edge(direction: str, materiality: float, market_price: float) -> tuple[str | None, float]:
-    """Compute (side, edge) from direction + price. Returns (None, 0) if invalid."""
+def _compute_side_and_edge(direction: str, materiality: float, market_price: float, signal_source: str = "news") -> tuple[str | None, float]:
+    """Compute (side, edge) from direction + price. Returns (None, 0) if invalid.
+
+    ANTI-BEARISH BIAS: Block ALL bearish signals.
+    Historical data: 2W/23L on NO trades (8% WR) — systematically wrong.
+    Only YES trades (bullish) are profitable: 6W/2L at entry >= 0.78.
+    """
+    # BLOCK: ALL bearish signals — 8% win rate historically
+    if direction == "bearish":
+        return None, 0.0
+
     if direction == "bullish":
         if market_price > 0.85:
             return None, 0.0
         return "YES", materiality * (1.0 - market_price)
-    # bearish
-    if market_price < 0.15:
-        return None, 0.0
     return "NO", materiality * market_price

@@ -21,9 +21,16 @@ from .markets import Market
 log = logging.getLogger(__name__)
 
 CLOB_HOST = "https://clob.polymarket.com"
+DATA_API_HOST = "https://data-api.polymarket.com"
 
 # Whale threshold: trades larger than this are "smart money" signals
 WHALE_USD_THRESHOLD = 500.0
+
+# Only count fills this recent as "current flow". Without a window, a market
+# that traded heavily months ago looks like it has live whale activity. With a
+# window too short, niche markets return 0-2 fills and confidence collapses to
+# 0 — 6h balances staleness against coverage.
+FLOW_WINDOW_SECONDS = 21600.0
 
 # Flow signal weight in the ensemble
 FLOW_WEIGHT = 0.15
@@ -39,23 +46,50 @@ class FlowSignal:
     confidence: float        # 0 to 1: how reliable is this signal
 
 
-def _fetch_recent_trades(token_id: str, limit: int = 50) -> list[dict]:
-    """Fetch recent trades for a token from the CLOB API.
-    
-    Uses the /trades endpoint which returns recent fills.
+def _fetch_recent_trades(market: Market, limit: int = 200) -> list[dict]:
+    """Fetch recent fills for a market, normalized to the YES perspective.
+
+    CLOB `/trades` is authenticated (401) and has been dead since ~2026-09.
+    The public `data-api` `/trades` endpoint takes the condition id — not the
+    token id — and returns both outcome tokens, so a trade is re-expressed as
+    BUY/SELL *of YES* before it reaches `_analyze_flow`.
     """
+    condition_id = market.condition_id
+    if not condition_id:
+        return []
     try:
         resp = http.get(
-            f"{CLOB_HOST}/trades",
-            params={"token_id": token_id, "limit": limit},
+            f"{DATA_API_HOST}/trades",
+            params={"market": condition_id, "limit": limit},
             timeout=10.0,
         )
         resp.raise_for_status()
         data = resp.json()
-        return data if isinstance(data, list) else data.get("data", [])
+        rows = data if isinstance(data, list) else data.get("data", [])
     except Exception as e:
         log.debug(f"[flow] trades fetch failed: {e}")
         return []
+
+    yes_token = market.token_id("YES")
+    no_token = market.token_id("NO")
+    now = time.time()
+    normalized: list[dict] = []
+    for trade in rows:
+        # Stale fills say nothing about current order flow.
+        try:
+            if now - float(trade.get("timestamp", 0)) > FLOW_WINDOW_SECONDS:
+                continue
+        except (TypeError, ValueError):
+            continue
+        side = str(trade.get("side", "")).upper()
+        asset = trade.get("asset")
+        if asset == no_token and side in ("BUY", "SELL"):
+            side = "SELL" if side == "BUY" else "BUY"
+        elif yes_token and asset != yes_token and asset != no_token:
+            # Unknown outcome token — don't guess its direction.
+            continue
+        normalized.append({**trade, "side": side})
+    return normalized
 
 
 def _fetch_order_book_depth(token_id: str) -> dict | None:
@@ -146,8 +180,8 @@ def compute_flow_signal(market: Market) -> FlowSignal:
     if not token_id:
         return FlowSignal(0.0, 0.0, 0, 0.0, 0.0)
 
-    # Fetch recent trades
-    trades = _fetch_recent_trades(token_id, limit=50)
+    # Fetch recent trades (public data-api, YES-normalized)
+    trades = _fetch_recent_trades(market, limit=200)
     net_dir, whale_bias, trade_count, avg_size = _analyze_flow(trades)
 
     # Fetch book for spread analysis
