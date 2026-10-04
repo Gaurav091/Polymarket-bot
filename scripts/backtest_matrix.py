@@ -14,6 +14,7 @@ from typing import Optional
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "historical_327_trades.db"
 FEE_RATE = 0.04  # Standard Polymarket taker fee rate
+ZERO_FEE_STR = "$0.00"
 
 
 def calculate_fees(shares: float, entry: float, exit_p: float) -> float:
@@ -42,21 +43,43 @@ class TradeMetrics:
     max_drawdown_pct: float
 
 
-def compute_metrics(trades: list[dict], maker: bool = False) -> TradeMetrics:
-    if not trades:
-        return TradeMetrics(0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-
-    pnls = []
-    fees_list = []
+def _calculate_trade_pnls(trades: list[dict], maker: bool) -> tuple[list[float], list[float]]:
+    pnls: list[float] = []
+    fees_list: list[float] = []
     for t in trades:
         shares = float(t.get("shares") or 0.0)
         entry = float(t.get("entry_price") or 0.50)
         exit_p = float(t.get("exit_price") or entry)
         gross = (exit_p - entry) * shares
         fee = 0.0 if maker else calculate_fees(shares, entry, exit_p)
-        net = gross - fee
-        pnls.append(net)
+        pnls.append(gross - fee)
         fees_list.append(fee)
+    return pnls, fees_list
+
+
+def _calculate_max_drawdown(pnls: list[float]) -> tuple[float, float]:
+    equity = 100.0
+    peak = equity
+    max_dd = 0.0
+    max_dd_pct = 0.0
+    for p in pnls:
+        equity += p
+        if equity > peak:
+            peak = equity
+        dd = peak - equity
+        dd_pct = (dd / peak * 100.0) if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+        if dd_pct > max_dd_pct:
+            max_dd_pct = dd_pct
+    return max_dd, max_dd_pct
+
+
+def compute_metrics(trades: list[dict], maker: bool = False) -> TradeMetrics:
+    if not trades:
+        return TradeMetrics(0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    pnls, fees_list = _calculate_trade_pnls(trades, maker)
 
     wins = [p for p in pnls if p > 0.005]
     losses = [p for p in pnls if p < -0.005]
@@ -73,26 +96,19 @@ def compute_metrics(trades: list[dict], maker: bool = False) -> TradeMetrics:
 
     avg_win = (sum(wins) / win_count) if win_count else 0.0
     avg_loss = (sum(losses) / loss_count) if loss_count else 0.0
-    profit_factor = (sum(wins) / abs(sum(losses))) if losses and sum(losses) != 0 else (99.0 if wins else 0.0)
+    
+    if losses and sum(losses) != 0:
+        profit_factor = sum(wins) / abs(sum(losses))
+    elif wins:
+        profit_factor = 99.0
+    else:
+        profit_factor = 0.0
+
     payoff_ratio = (avg_win / abs(avg_loss)) if avg_loss else 0.0
     expectancy = (net_pnl / total_count) if total_count else 0.0
     avg_trade = expectancy
 
-    # Drawdown calculation
-    equity = 100.0
-    peak = equity
-    max_dd = 0.0
-    max_dd_pct = 0.0
-    for p in pnls:
-        equity += p
-        if equity > peak:
-            peak = equity
-        dd = peak - equity
-        dd_pct = (dd / peak * 100.0) if peak > 0 else 0.0
-        if dd > max_dd:
-            max_dd = dd
-        if dd_pct > max_dd_pct:
-            max_dd_pct = dd_pct
+    max_dd, max_dd_pct = _calculate_max_drawdown(pnls)
 
     return TradeMetrics(
         total_trades=total_count,
@@ -130,28 +146,21 @@ def run_analysis():
     base = compute_metrics(all_trades, maker=False)
 
     # 2. Strategy Filters Simulation:
-    # Filter A: Block Bearish Signals (8% historical win rate)
     no_bearish = [t for t in all_trades if (t.get("classification") or "").lower() != "bearish"]
-
-    # Filter B: Min Entry Price >= $0.40 (sub-0.35 had negative EV)
     above_40 = [t for t in all_trades if float(t.get("entry_price") or 0) >= 0.40]
 
-    # Filter C: Filter A + B
     no_bear_above_40 = [
         t for t in all_trades
         if (t.get("classification") or "").lower() != "bearish"
         and float(t.get("entry_price") or 0) >= 0.40
     ]
 
-    # Filter D: Filter A + B + Dead Market Elimination
     filtered_active = [
         t for t in no_bear_above_40
         if t.get("exit_reason") != "dead_market"
     ]
 
     # 3. Maker Orders (0 Fees)
-    base_maker = compute_metrics(all_trades, maker=True)
-    optimized_taker = compute_metrics(filtered_active, maker=False)
     optimized_maker = compute_metrics(filtered_active, maker=True)
 
     print("┌" + "─" * 76 + "┐")
@@ -170,7 +179,7 @@ def run_analysis():
         ("Losing Trades", str(base.losing_trades), str(no_bear_maker.losing_trades), str(above_40_maker.losing_trades), str(optimized_maker.losing_trades)),
         ("Win Rate (%)", f"{base.win_rate:.1f}%", f"{no_bear_maker.win_rate:.1f}%", f"{above_40_maker.win_rate:.1f}%", f"{optimized_maker.win_rate:.1f}%"),
         ("Gross PnL ($)", f"${base.gross_pnl:+.2f}", f"${no_bear_maker.gross_pnl:+.2f}", f"${above_40_maker.gross_pnl:+.2f}", f"${optimized_maker.gross_pnl:+.2f}"),
-        ("Fees Paid ($)", f"${base.fees:.2f}", "$0.00", "$0.00", "$0.00"),
+        ("Fees Paid ($)", f"${base.fees:.2f}", ZERO_FEE_STR, ZERO_FEE_STR, ZERO_FEE_STR),
         ("Net PnL ($)", f"${base.net_pnl:+.2f}", f"${no_bear_maker.net_pnl:+.2f}", f"${above_40_maker.net_pnl:+.2f}", f"${optimized_maker.net_pnl:+.2f}"),
         ("Profit Factor", f"{base.profit_factor:.2f}", f"{no_bear_maker.profit_factor:.2f}", f"{above_40_maker.profit_factor:.2f}", f"{optimized_maker.profit_factor:.2f}"),
         ("Avg Win ($)", f"${base.avg_win:.2f}", f"${no_bear_maker.avg_win:.2f}", f"${above_40_maker.avg_win:.2f}", f"${optimized_maker.avg_win:.2f}"),
@@ -209,7 +218,7 @@ def run_analysis():
     print("=" * 78)
     print(f"{'Exit Reason':<18} | {'Trades':<8} | {'Wins':<6} | {'Win Rate':<10} | {'Net PnL':<12} | {'Avg PnL':<10}")
     print("-" * 78)
-    reasons = sorted(list({t.get("exit_reason") or "unknown" for t in all_trades}))
+    reasons = sorted({t.get("exit_reason") or "unknown" for t in all_trades})
     for r in reasons:
         subset = [t for t in all_trades if (t.get("exit_reason") or "unknown") == r]
         m = compute_metrics(subset, maker=False)
