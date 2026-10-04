@@ -112,7 +112,37 @@ def log_trade_open(
     trade_id = cur.lastrowid
     conn.commit()
     conn.close()
-    return trade_id
+    return trade_id if trade_id is not None else 0
+
+
+def _calculate_close_fee(status: str, entry: float, exit_held_price: float, shares: float) -> float:
+    """Calculate Polymarket taker fee for trade close."""
+    fr = config.POLY_FEE_RATE
+    entry_fee = shares * fr * entry * (1.0 - entry)
+    if status == "dead_market" and abs(exit_held_price - entry) < 1e-9:
+        exit_fee = 0.0
+    else:
+        exit_fee = shares * fr * exit_held_price * (1.0 - exit_held_price)
+    return entry_fee + exit_fee
+
+
+def _compute_path_metrics(
+    row: sqlite3.Row, entry: float, exit_held_price: float, tp_move: float, sl_move: float
+) -> tuple[float | None, int, int]:
+    """Compute holding duration and whether TP/SL targets were hit."""
+    if tp_move <= 0 or sl_move <= 0:
+        return None, 0, 0
+    try:
+        entered = datetime.fromisoformat(row["entry_at"])
+        if entered.tzinfo is None:
+            entered = entered.replace(tzinfo=timezone.utc)
+        holding_minutes = (datetime.now(timezone.utc) - entered).total_seconds() / 60
+        move = exit_held_price - entry
+        tp_hit = 1 if move >= tp_move else 0
+        sl_hit = 1 if move <= -sl_move else 0
+        return holding_minutes, tp_hit, sl_hit
+    except Exception:
+        return None, 0, 0
 
 
 def log_trade_close(
@@ -140,45 +170,15 @@ def log_trade_close(
 
     shares = row["shares"]
     entry = row["entry_price"]
-    side = row["side"]
-
-    # Convert YES exit price to the held side's price
-    exit_held_price = exit_yes_price if side == "YES" else 1.0 - exit_yes_price
-
-    # Gross PnL: bought shares at entry, now worth exit_held_price each
+    exit_held_price = exit_yes_price if row["side"] == "YES" else 1.0 - exit_yes_price
     gross_pnl = (exit_held_price - entry) * shares
 
-    # Polymarket fee calculation: fee = shares * feeRate * p * (1-p)
-    # Applied on both entry and exit (market orders = taker).
-    fr = config.POLY_FEE_RATE
-    entry_fee = shares * fr * entry * (1 - entry)
-    # A dead_market close never places a real sell order (book is empty),
-    # so no exit fee is actually paid. Charging it manufactures a guaranteed
-    # loss on every dead-market exit.
-    if status == "dead_market" and abs(exit_held_price - entry) < 1e-9:
-        exit_fee = 0.0
-    else:
-        exit_fee = shares * fr * exit_held_price * (1 - exit_held_price)
-    total_fee = entry_fee + exit_fee
+    total_fee = _calculate_close_fee(status, entry, exit_held_price, shares)
     pnl = gross_pnl - total_fee
 
-    # Compute holding_minutes, tp_hit, sl_hit if price path data available
-    holding_minutes = None
-    tp_hit = 0
-    sl_hit = 0
-    if entry_row is not None and tp_move > 0 and sl_move > 0:
-        try:
-            entered = datetime.fromisoformat(row["entry_at"])
-            if entered.tzinfo is None:
-                entered = entered.replace(tzinfo=timezone.utc)
-            holding_minutes = (datetime.now(timezone.utc) - entered).total_seconds() / 60
-            move = exit_held_price - entry
-            if move >= tp_move:
-                tp_hit = 1
-            elif move <= -sl_move:
-                sl_hit = 1
-        except Exception:
-            pass
+    holding_minutes, tp_hit, sl_hit = None, 0, 0
+    if entry_row is not None:
+        holding_minutes, tp_hit, sl_hit = _compute_path_metrics(row, entry, exit_held_price, tp_move, sl_move)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     if holding_minutes is not None:
