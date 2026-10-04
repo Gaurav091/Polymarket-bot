@@ -10,8 +10,7 @@
                 "cwd": "${workspaceFolder}",
                 "env": {
                     "DRY_RUN": "true",
-                    "PYTHONUNBUFFERED": "1",
-                    "POSITION_TIMEOUT_MINUTES": "20"
+                    "PYTHONUNBUFFERED": "1"
                 }
             },
             "isBackground": false,

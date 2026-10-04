@@ -57,24 +57,19 @@ TOTAL_MAX_LOSS_PCT = float(os.getenv("TOTAL_MAX_LOSS_PCT", "0.40"))      # 40%
 # Market filters (niche-market strategy from PolyAgent)
 # ============================================================
 MIN_VOLUME_USD = float(os.getenv("MIN_VOLUME_USD", "1000"))
-MAX_VOLUME_USD = float(os.getenv("MAX_VOLUME_USD", "500000"))
-MATERIALITY_THRESHOLD = float(os.getenv("MATERIALITY_THRESHOLD", "0.70"))
+MAX_VOLUME_USD = float(os.getenv("MAX_VOLUME_USD", "25000000"))
+MATERIALITY_THRESHOLD = float(os.getenv("MATERIALITY_THRESHOLD", "0.35"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
-# Extended timeout: prediction markets need 20-30 min for true price discovery.
-# Dumping at 12 min forced premature exits on flat positions and burned spread/fees.
-POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "25"))
+POSITION_TIMEOUT_MINUTES = int(os.getenv("POSITION_TIMEOUT_MINUTES", "45"))
 MAX_STOP_LOSS_USD = float(os.getenv("MAX_STOP_LOSS_USD", "2.5"))
 MAKER_ORDERS = os.getenv("MAKER_ORDERS", "true").lower() == "true"
 MAX_SPREAD_USD = float(os.getenv("MAX_SPREAD_USD", "0.08"))  # 8¢ max spread
-# Minimum hours until market expiration — avoid markets ending too soon
-# (sports markets, events ending today). Default 1 hour = 60 minutes.
-MIN_HOURS_TO_EXPIRATION = int(os.getenv("MIN_HOURS_TO_EXPIRATION", "1"))
+# Expiration bounds: avoid markets resolving too soon (<6h) or too far (>90d)
+MIN_HOURS_TO_EXPIRATION = int(os.getenv("MIN_HOURS_TO_EXPIRATION", "6"))
+MAX_DAYS_TO_EXPIRATION = int(os.getenv("MAX_DAYS_TO_EXPIRATION", "90"))
 
 # Quant engine (Python-native, free data — no LLM)
-# Raised from 0.35→0.50→0.55→0.65→0.75: 35% WR at 0.35 was unprofitable.
-# 40%+ edge trades averaged -$1.51 — ensemble overconfident on weak signals.
-# With bearish signals blocked, need higher threshold for remaining bullish signals.
-QUANT_MIN_STRENGTH = float(os.getenv("QUANT_MIN_STRENGTH", "0.75"))
+QUANT_MIN_STRENGTH = float(os.getenv("QUANT_MIN_STRENGTH", "0.20"))
 
 # TimesFM 2.5 (200M, Apache-2.0) — Google time-series foundation model.
 # CPU-only on this machine: ~0.7s/market batched. Disabled by default;

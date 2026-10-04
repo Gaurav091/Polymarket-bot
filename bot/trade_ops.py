@@ -86,14 +86,17 @@ def _position_exit(bot, row, prices, entry, side, age_min, tp_move, sl_move):
         unrealized = move * row["shares"]
         reason = "survival_take" if unrealized >= 0.02 else "survival_cut"
         return reason, tp_move, sl_move
-    if age_min >= POSITION_MAX_AGE:
-        return "timeout", 0.0, 0.0
     if move >= tp_move:
         return "take_profit", tp_move, sl_move
     # Minimum 2-minute hold before stop-loss — prevents 12-second catastrophic
     # stops caused by taker fills at worse prices than expected.
     if move <= -sl_move and age_min >= 2.0:
         return "stop_loss", tp_move, sl_move
+    if age_min >= POSITION_MAX_AGE:
+        # If position is in profit at timeout, harvest as take_profit
+        if move >= 0.005:
+            return "take_profit", tp_move, sl_move
+        return "timeout", 0.0, 0.0
     return None
 
 
@@ -127,15 +130,15 @@ def monitor_positions(bot):
                       resolved=is_resolved(yes_now, prices[1]))
         entered = _parse_dt(row["entry_at"])
         age_min = (datetime.now(timezone.utc) - entered).total_seconds() / 60
-        # TP/SL scaled by entry price — wider for mid-range, tighter for extremes
+        # TP/SL scaled by entry price — capture 2.5-6¢ moves (4-8% return)
         if entry >= 0.50:
-            tp_move = min(0.10, max(0.05, entry * 0.15))  # 5-10¢ TP
+            tp_move = min(0.08, max(0.03, entry * 0.10))  # 3-8¢ TP
             sl_move = min(0.06, max(0.03, entry * 0.12))   # 3-6¢ SL
         elif entry >= 0.35:
-            tp_move = min(0.08, max(0.04, entry * 0.12))   # 4-8¢ TP
+            tp_move = min(0.06, max(0.025, entry * 0.08))  # 2.5-6¢ TP
             sl_move = min(0.05, max(0.02, entry * 0.10))   # 2-5¢ SL
         else:
-            tp_move = min(0.05, max(0.03, entry * 0.15))   # 3-5¢ TP
+            tp_move = min(0.05, max(0.02, entry * 0.10))   # 2-5¢ TP
             sl_move = min(0.04, max(0.02, entry * 0.12))   # 2-4¢ SL
 
         # Cap SL move to prevent catastrophic dollar losses on low-price entries
@@ -219,19 +222,19 @@ def _check_policy_gates(bot, signal, open_ids: set) -> str | None:
 
 
 def _check_watcher_gate(bot, signal) -> str | None:
-    """Block trades where the real-time watcher has no data (dead/illiquid book)."""
+    """Block trades where both the real-time watcher and CLOB have no orderbook."""
     token_id_check = signal.market.token_id(signal.side)
     if token_id_check is None:
         return None
     watcher_data = getattr(bot, "watcher", None)
-    if watcher_data is None:
+    if watcher_data and watcher_data.get_latest(token_id_check) is not None:
         return None
-    latest = watcher_data.get_latest(token_id_check)
-    if latest is not None:
-        return None
-    # Also check the YES-side token if checking NO token
     yes_token = signal.market.token_id("YES")
-    if yes_token and watcher_data.get_latest(yes_token) is not None:
+    if yes_token and watcher_data and watcher_data.get_latest(yes_token) is not None:
+        return None
+    from .quant_signals import fetch_order_book
+    book = fetch_order_book(token_id_check or yes_token or "")
+    if book and book.get("bids") and book.get("asks"):
         return None
     return "watcher-no-data (likely dead book)"
 

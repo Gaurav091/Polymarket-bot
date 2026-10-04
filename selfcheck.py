@@ -15,6 +15,7 @@ config.SURVIVAL_GRACE_MINUTES = 0
 # Selfcheck tests the death lifecycle — force-enable survival even when
 # the bot itself runs with SURVIVAL_ENABLED=false (run-forever mode)
 config.SURVIVAL_ENABLED = True
+config.MAKER_ORDERS = False
 
 # Use a throwaway DB — never pollute the production journal
 config.DB_PATH = str(Path(__file__).parent / "data" / "selfcheck_test.db")

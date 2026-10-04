@@ -116,7 +116,9 @@ def log_trade_open(
 
 
 def _calculate_close_fee(status: str, entry: float, exit_held_price: float, shares: float) -> float:
-    """Calculate Polymarket taker fee for trade close."""
+    """Calculate Polymarket fee for trade close (0.0 for maker orders)."""
+    if config.MAKER_ORDERS:
+        return 0.0
     fr = config.POLY_FEE_RATE
     entry_fee = shares * fr * entry * (1.0 - entry)
     if status == "dead_market" and abs(exit_held_price - entry) < 1e-9:
