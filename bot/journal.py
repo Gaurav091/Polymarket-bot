@@ -118,8 +118,15 @@ def log_trade_open(
 def _calculate_close_fee(
     status: str, entry: float, exit_held_price: float, shares: float, is_maker: bool | None = None
 ) -> float:
-    """Calculate Polymarket fee for trade close (0.0 for maker orders)."""
-    if is_maker is True or (is_maker is None and config.MAKER_ORDERS):
+    """Calculate Polymarket fee for trade close.
+
+    - If is_maker is True (confirmed maker fill in live trading): 0.0 fee.
+    - In paper trading replica mode and live taker fallback:
+      Calculates the official Polymarket dynamic taker fee:
+        Fee = shares * feeRate * price * (1 - price)
+      Default fee rate is 0.04 (4% Polymarket taker rate).
+    """
+    if is_maker is True:
         return 0.0
     fr = config.POLY_FEE_RATE
     entry_fee = shares * fr * entry * (1.0 - entry)
@@ -127,7 +134,7 @@ def _calculate_close_fee(
         exit_fee = 0.0
     else:
         exit_fee = shares * fr * exit_held_price * (1.0 - exit_held_price)
-    return entry_fee + exit_fee
+    return round(entry_fee + exit_fee, 4)
 
 
 def _compute_path_metrics(

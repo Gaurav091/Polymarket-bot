@@ -92,10 +92,14 @@ def _position_exit(bot, row, prices, entry, side, age_min, tp_move, sl_move):
     # stops caused by taker fills at worse prices than expected.
     if move <= -sl_move and age_min >= 2.0:
         return "stop_loss", tp_move, sl_move
+    fee_roundtrip = 2.0 * config.POLY_FEE_RATE * entry * (1.0 - entry)
     if age_min >= POSITION_MAX_AGE:
-        # If position is in profit at timeout, harvest as take_profit
-        if move >= 0.005:
+        # If position has moved enough to cover round-trip fees + margin, harvest as take_profit
+        if move >= fee_roundtrip + 0.005:
             return "take_profit", tp_move, sl_move
+        # If slightly positive but below fee breakeven, give extra time up to 2x MAX_AGE to hit full target
+        if move > 0 and age_min < POSITION_MAX_AGE * 2:
+            return None
         return "timeout", 0.0, 0.0
     return None
 
@@ -130,15 +134,18 @@ def monitor_positions(bot):
                       resolved=is_resolved(yes_now, prices[1]))
         entered = _parse_dt(row["entry_at"])
         age_min = (datetime.now(timezone.utc) - entered).total_seconds() / 60
-        # TP/SL scaled by entry price — capture 2.5-6¢ moves (4-8% return)
+        # Fee-aware TP calculation: round-trip taker fee buffer ensures every TP is net profitable
+        fee_roundtrip = 2.0 * config.POLY_FEE_RATE * entry * (1.0 - entry)
+        min_tp = fee_roundtrip + 0.015  # At least 1.5¢ net profit above full round-trip fees
+        # TP/SL scaled by entry price — capture 3.5-8¢ moves (5-12% return)
         if entry >= 0.50:
-            tp_move = min(0.08, max(0.03, entry * 0.10))  # 3-8¢ TP
+            tp_move = min(0.08, max(min_tp, entry * 0.10))  # 3.5-8¢ TP
             sl_move = min(0.06, max(0.03, entry * 0.12))   # 3-6¢ SL
         elif entry >= 0.35:
-            tp_move = min(0.06, max(0.025, entry * 0.08))  # 2.5-6¢ TP
+            tp_move = min(0.06, max(min_tp, entry * 0.08))  # 3.5-6¢ TP
             sl_move = min(0.05, max(0.02, entry * 0.10))   # 2-5¢ SL
         else:
-            tp_move = min(0.05, max(0.02, entry * 0.10))   # 2-5¢ TP
+            tp_move = min(0.05, max(min_tp, entry * 0.10))   # 3-5¢ TP
             sl_move = min(0.04, max(0.02, entry * 0.12))   # 2-4¢ SL
 
         # Cap SL move to prevent catastrophic dollar losses on low-price entries
