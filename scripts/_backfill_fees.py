@@ -8,7 +8,7 @@ conn = _conn()
 FEE_RATE = 0.04  # Default Politics/Tech rate
 rows = conn.execute(
     "SELECT id, side, entry_price, exit_price, shares, pnl_usd "
-    "FROM trades WHERE status != 'open' AND fees_paid IS NULL"
+    "FROM trades WHERE status != 'open' AND (fees_paid IS NULL OR fees_paid = 0.0)"
 ).fetchall()
 
 print(f"Backfilling fees for {len(rows)} closed trades (feeRate={FEE_RATE})")
